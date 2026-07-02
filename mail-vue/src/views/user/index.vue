@@ -229,9 +229,9 @@
       <div class="details">
         <div v-if="userDetails.username"><span class="details-item-title">LinuxDo:</span>
           <el-avatar :src="userDetails.avatar" :size="30" class="linuxdo-avatar"  />
-          <span style="margin: 0 10px">用户名：{{userDetails.username}}</span>
+          <span style="margin: 0 10px">{{ $t('username') }}：{{userDetails.username}}</span>
           <span>
-                    等级：<el-tag type="success">{{userDetails.trustLevel}}</el-tag>
+                    {{ $t('trustLevel') }}：<el-tag type="success">{{userDetails.trustLevel}}</el-tag>
                   </span>
         </div>
         <div v-if="!sendNumShow"><span

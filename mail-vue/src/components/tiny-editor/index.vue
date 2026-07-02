@@ -65,13 +65,14 @@ watch(() => [uiStore.dark, settingStore.lang], () => {
   initTinyMCE();
 });
 
-const language = computed(() => {
-  if (locale.value === 'zh') {
-    return 'zh_CN'
-  }
+// 对应 public/tinymce/langs 下的语言包文件名，en 为 TinyMCE 内置
+const TINYMCE_LANGS = {
+  zh: 'zh_CN',
+  'zh-tw': 'zh_TW',
+  ja: 'ja',
+}
 
-  return 'en'
-})
+const language = computed(() => TINYMCE_LANGS[locale.value] || 'en')
 
 function clearEditor() {
   if (editor.value) {

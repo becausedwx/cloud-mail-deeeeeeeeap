@@ -47,6 +47,7 @@ const config = {
   name: workerName,
   main: '../mail-worker/src/index.js',
   compatibility_date: '2025-06-04',
+  compatibility_flags: ['nodejs_als'],
   keep_vars: true,
   workers_dev: true,
   preview_urls: true,

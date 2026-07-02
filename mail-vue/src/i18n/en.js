@@ -360,7 +360,7 @@ const en = {
     emailText: 'Email Text',
     emailPrefix: 'Email Prefix',
     atLeast: 'At Least',
-    character: '',
+    character: 'characters',
     mustNotContain: 'Must Not Contain',
     mustNotContainDesc: 'Separate with commas',
     blackSubjectDesc: 'Subject',
@@ -381,7 +381,12 @@ const en = {
     searchUser: 'Search by user',
     searchEmail: 'Search by Email',
     searchSender: 'Search by Sender',
-    userEmail: 'Email Address'
+    userEmail: 'Email Address',
+    bindEmailTitle: 'Register Email',
+    bind: 'Bind',
+    bindEmailMsg: 'Please register and bind an email address',
+    trustLevel: 'Level',
+    loginLoading: 'Logging in...'
 }
 
 export default en

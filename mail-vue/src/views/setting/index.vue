@@ -38,8 +38,8 @@
           placeholder="Select"
           @change="changeLang"
       >
-        <el-option label="中文" value="zh" @pointerdown.prevent.stop="changeLang('zh')"/>
-        <el-option label="English" value="en" @pointerdown.prevent.stop="changeLang('en')"/>
+        <el-option v-for="item in SUPPORTED_LANGS" :key="item.value" :label="item.label" :value="item.value"
+                   @pointerdown.prevent.stop="changeLang(item.value)"/>
       </el-select>
     </div>
     <div class="del-email" v-perm="'my:delete'">
@@ -69,6 +69,7 @@ import {accountSetName} from "@/request/account.js";
 import {useAccountStore} from "@/store/account.js";
 import {useI18n} from "vue-i18n";
 import {useSettingStore} from "@/store/setting.js";
+import {SUPPORTED_LANGS} from "@/i18n/index.js";
 
 const { t } = useI18n()
 const accountStore = useAccountStore()

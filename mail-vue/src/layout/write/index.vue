@@ -494,7 +494,9 @@ function openReply(email) {
       email.subject.startsWith('Re:') ||
       email.subject.startsWith('Re：') ||
       email.subject.startsWith('回复：') ||
-      email.subject.startsWith('回复:')) ? email.subject : 'Re: ' + email.subject
+      email.subject.startsWith('回复:') ||
+      email.subject.startsWith('回覆：') ||
+      email.subject.startsWith('回覆:')) ? email.subject : 'Re: ' + email.subject
   form.sendType = 'reply'
   form.emailId = email.emailId
 
