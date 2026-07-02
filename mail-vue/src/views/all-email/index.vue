@@ -382,35 +382,27 @@ async function latest() {
 </script>
 <style>
 
+/* 手机端范围选择器：双月面板从左右并排改为上下堆叠，
+   避免窄屏下两个面板互相挤压、表头错位遮挡 */
 @media (max-width: 767px) {
-  .el-date-range-picker .el-picker-panel__body {
-    min-width: auto;
-
+  .my-date-picker .el-picker-panel__body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0 !important;
   }
 
-  .my-date-picker::after {
-    content: "";
-    position: absolute; /* 脱离文档流，不会撑开 */
-    left: 0;
-    right: 0;
-    height: 20px;
-    background: transparent; /* 方便看效果 */
+  .my-date-picker .el-date-range-picker {
+    width: min(322px, calc(100vw - 40px)) !important;
   }
 
-  .el-date-range-picker__content {
-    width: 100%;
+  .my-date-picker .el-date-range-picker__content {
+    width: 100% !important;
+    float: none !important;
   }
 
-  .el-date-range-picker {
-    width: 300px;
-  }
-
-  .el-tooltip .el-picker_popper {
-    padding-bottom: 200px;
-  }
-
-  .el-date-range-picker__content.is-left {
-    border-right: 0;
+  .my-date-picker .el-date-range-picker__content.is-left {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--el-border-color-light);
   }
 }
 

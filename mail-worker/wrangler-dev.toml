@@ -43,5 +43,5 @@ orm_log = false
 domain = ["example.com", "example2.com", "example3.com", "example4.com"]
 admin = "admin@example.com"
 jwt_secret = "your-jwt-secret"	#本地私填,不要提交真实密钥
-cors_origins = ""
+cors_origins = "[\"http://localhost:3001\",\"http://127.0.0.1:3001\"]"
 resend_webhook_secret = ""

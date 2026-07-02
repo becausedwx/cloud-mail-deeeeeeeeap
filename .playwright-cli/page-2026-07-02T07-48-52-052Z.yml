@@ -1,0 +1,5 @@
+- generic [active] [ref=e1]:
+  - img "Cloud Mail" [ref=e4]
+  - alert [ref=e7]:
+    - img [ref=e9]
+    - paragraph [ref=e11]: 网络错误，请检查网络连接
