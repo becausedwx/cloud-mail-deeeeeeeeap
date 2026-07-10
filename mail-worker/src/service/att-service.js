@@ -21,34 +21,44 @@ function normalizeAttId(attId) {
 
 function contentDisposition(filename) {
 	const fallback = String(filename || 'attachment')
-		.replace(/[\r\n"]/g, '_')
+		.replace(/[\r\n"\\]/g, '_')
 		.replace(/[^\x20-\x7E]/g, '_') || 'attachment';
-	const encoded = encodeURIComponent(filename || 'attachment');
+	const encoded = encodeURIComponent(filename || 'attachment')
+		.replace(/['()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 	return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+function attachmentMimeType(attachment) {
+	return attachment.mimeType
+		|| attachment.contentType
+		|| attachment.type
+		|| 'application/octet-stream';
 }
 
 const attService = {
 
 	async addAtt(c, attachments) {
+		const writtenKeys = new Set();
+		await orm(c).insert(att).values(attachments).run();
 
 		for (let attachment of attachments) {
-
-			let metadate = {
-				contentType: attachment.mimeType,
+			if (writtenKeys.has(attachment.key)) {
+				continue;
 			}
 
-			if (!attachment.contentId) {
-				metadate.contentDisposition = `attachment;filename=${attachment.filename}`
-			} else {
-				metadate.contentDisposition = `inline;filename=${attachment.filename}`
-				metadate.cacheControl = `max-age=259200`
+			const metadata = {
+				contentType: attachmentMimeType(attachment)
 			}
 
-			await r2Service.putObj(c, attachment.key, attachment.content, metadate);
+			if (attachment.contentId) {
+				metadata.contentDisposition = 'inline';
+				metadata.cacheControl = `max-age=259200`
+			}
+
+			await r2Service.putObj(c, attachment.key, attachment.content, metadata);
+			writtenKeys.add(attachment.key);
 
 		}
-
-		await orm(c).insert(att).values(attachments).run();
 	},
 
 	list(c, params, userId) {
@@ -141,11 +151,16 @@ const attService = {
 
 	async toDownloadResponse(c, attRow) {
 		const obj = await r2Service.getObj(c, attRow.key);
-		const response = r2Service.toResponse(obj, {
+		const responseHeaders = {
 			'Content-Disposition': contentDisposition(attRow.filename),
 			'Cache-Control': 'private, max-age=0, no-store',
 			'Access-Control-Expose-Headers': 'Content-Disposition'
-		});
+		};
+		if (attRow.mimeType) {
+			responseHeaders['Content-Type'] = attRow.mimeType;
+		}
+
+		const response = r2Service.toResponse(obj, responseHeaders);
 
 		if (!response) {
 			throw new BizError(NOT_FOUND_MESSAGE, 404);
@@ -256,31 +271,36 @@ const attService = {
 	async saveSendAtt(c, attList, userId, accountId, emailId) {
 
 		const attDataList = [];
+		const objectByKey = new Map();
 
 		for (let att of attList) {
 			att.buff = fileUtils.base64ToUint8Array(att.content);
 			att.key = constant.ATTACHMENT_PREFIX + await fileUtils.getBuffHash(att.buff) + fileUtils.getExtFileName(att.filename);
+			att.mimeType = attachmentMimeType(att);
+			if (!objectByKey.has(att.key)) {
+				objectByKey.set(att.key, att);
+			}
 			const attData = { userId, accountId, emailId };
 			attData.key = att.key;
 			attData.size = att.buff.length;
 			attData.filename = att.filename;
-			attData.mimeType = att.type;
+			attData.mimeType = att.mimeType;
 			attData.type = attConst.type.ATT;
 			attDataList.push(attData);
 		}
 
 		await orm(c).insert(att).values(attDataList).run();
 
-		for (let att of attList) {
+		for (const att of objectByKey.values()) {
 			await r2Service.putObj(c, att.key, att.buff, {
-				contentType: att.type,
-				contentDisposition: `attachment;filename=${att.filename}`
+				contentType: att.mimeType
 			});
 		}
 
 	},
 
 	async saveArticleAtt(c, attDataList, userId, accountId, emailId) {
+		const writtenKeys = new Set();
 
 		for (let attData of attDataList) {
 			attData.userId = userId;
@@ -290,11 +310,14 @@ const attService = {
 			if (!attData.buff) {
 				continue;
 			}
-			await r2Service.putObj(c, attData.key, attData.buff, {
-				contentType: attData.mimeType,
-				cacheControl: `max-age=259200`,
-				contentDisposition: `inline;filename=${attData.filename}`
-			});
+			if (!writtenKeys.has(attData.key)) {
+				await r2Service.putObj(c, attData.key, attData.buff, {
+					contentType: attachmentMimeType(attData),
+					cacheControl: `max-age=259200`,
+					contentDisposition: 'inline'
+				});
+				writtenKeys.add(attData.key);
+			}
 			delete attData.buff;
 		}
 

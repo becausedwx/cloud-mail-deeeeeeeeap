@@ -128,12 +128,13 @@ export async function email(message, env, ctx) {
 			attachment.accountId = emailRow.accountId;
 		});
 
-		try {
-			if (attachments.length > 0) {
+		if (attachments.length > 0) {
+			try {
 				await attService.addAtt({ env }, attachments);
+			} catch (e) {
+				await emailService.failReceive({ env }, emailRow.emailId, e?.message || String(e));
+				throw e;
 			}
-		} catch (e) {
-			console.error(e);
 		}
 
 		emailRow = await emailService.completeReceive({ env }, account ? emailConst.status.RECEIVE : emailConst.status.NOONE, emailRow.emailId);
@@ -197,11 +198,19 @@ export async function email(message, env, ctx) {
 	}
 }
 
+function blockList(value) {
+	if (typeof value !== 'string') {
+		return [];
+	}
+
+	return value.split(',').map(item => item.trim()).filter(Boolean);
+}
+
 function checkBlock(blackSubjectStr, blackContentStr, blackFromStr, email) {
 
-	const blackFromList = blackFromStr ? blackFromStr.split(',') : []
-	const blackContentList = blackContentStr ? blackContentStr.split(',') : []
-	const blackSubjectList = blackSubjectStr ? blackSubjectStr.split(',') : []
+	const blackFromList = blockList(blackFromStr);
+	const blackContentList = blockList(blackContentStr);
+	const blackSubjectList = blockList(blackSubjectStr);
 
 	for (const blackSubject of blackSubjectList) {
 		if (email.subject?.includes(blackSubject)) {

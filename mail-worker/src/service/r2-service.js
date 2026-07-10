@@ -1,6 +1,40 @@
 import s3Service from './s3-service';
 import settingService from './setting-service';
 import kvObjService from './kv-obj-service';
+import { isBrowserSafeHeaderValue, setBrowserSafeHeader } from '../utils/http-header-utils';
+
+function sanitizeHttpMetadata(metadata = {}) {
+	const result = {};
+	for (const key of [
+		'contentType',
+		'contentLanguage',
+		'contentDisposition',
+		'contentEncoding',
+		'cacheControl'
+	]) {
+		if (isBrowserSafeHeaderValue(metadata[key])) {
+			result[key] = metadata[key];
+		}
+	}
+
+	if (metadata.cacheExpiry instanceof Date && !Number.isNaN(metadata.cacheExpiry.getTime())) {
+		result.cacheExpiry = metadata.cacheExpiry;
+	}
+
+	return result;
+}
+
+function copyHttpMetadata(headers, metadata = {}) {
+	setBrowserSafeHeader(headers, 'Content-Type', metadata.contentType);
+	setBrowserSafeHeader(headers, 'Content-Language', metadata.contentLanguage);
+	setBrowserSafeHeader(headers, 'Content-Disposition', metadata.contentDisposition);
+	setBrowserSafeHeader(headers, 'Content-Encoding', metadata.contentEncoding);
+	setBrowserSafeHeader(headers, 'Cache-Control', metadata.cacheControl);
+
+	if (metadata.cacheExpiry instanceof Date && !Number.isNaN(metadata.cacheExpiry.getTime())) {
+		headers.set('Expires', metadata.cacheExpiry.toUTCString());
+	}
+}
 
 const r2Service = {
 
@@ -23,19 +57,20 @@ const r2Service = {
 	async putObj(c, key, content, metadata) {
 
 		const storageType = await this.storageType(c);
+		const safeMetadata = sanitizeHttpMetadata(metadata);
 
 		if (storageType === 'KV') {
-			await kvObjService.putObj(c, key, content, metadata);
+			await kvObjService.putObj(c, key, content, safeMetadata);
 		}
 
 		if (storageType === 'R2') {
 			await c.env.r2.put(key, content, {
-				httpMetadata: { ...metadata }
+				httpMetadata: safeMetadata
 			});
 		}
 
 		if (storageType === 'S3') {
-			await s3Service.putObj(c, key, content, metadata);
+			await s3Service.putObj(c, key, content, safeMetadata);
 		}
 
 	},
@@ -67,16 +102,23 @@ const r2Service = {
 		if (obj instanceof Response) {
 			body = obj.body;
 			obj.headers.forEach((value, key) => {
-				if (value && value !== 'null') {
-					headers.set(key, value);
+				if (value !== 'null') {
+					setBrowserSafeHeader(headers, key, value);
 				}
 			});
-		} else if (typeof obj.writeHttpMetadata === 'function') {
-			obj.writeHttpMetadata(headers);
 		} else if (obj.httpMetadata) {
-			if (obj.httpMetadata.contentType) headers.set('Content-Type', obj.httpMetadata.contentType);
-			if (obj.httpMetadata.contentDisposition) headers.set('Content-Disposition', obj.httpMetadata.contentDisposition);
-			if (obj.httpMetadata.cacheControl) headers.set('Cache-Control', obj.httpMetadata.cacheControl);
+			copyHttpMetadata(headers, obj.httpMetadata);
+		} else if (typeof obj.writeHttpMetadata === 'function') {
+			const metadataHeaders = new Headers();
+			try {
+				obj.writeHttpMetadata(metadataHeaders);
+				metadataHeaders.forEach((value, key) => setBrowserSafeHeader(headers, key, value));
+			} catch (e) {
+				if (e?.name !== 'TypeError') {
+					throw e;
+				}
+				// Invalid legacy metadata must not make the object body unavailable.
+			}
 		}
 
 		if (!headers.get('Content-Type')) {
@@ -84,9 +126,7 @@ const r2Service = {
 		}
 
 		Object.entries(extraHeaders).forEach(([key, value]) => {
-			if (value !== undefined && value !== null && value !== '') {
-				headers.set(key, value);
-			}
+			setBrowserSafeHeader(headers, key, value);
 		});
 
 		return new Response(body, { headers });

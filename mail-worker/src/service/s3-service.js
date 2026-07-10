@@ -2,6 +2,7 @@ import { S3Client, PutObjectCommand, DeleteObjectsCommand, GetObjectCommand } fr
 import settingService from './setting-service';
 import domainUtils from '../utils/domain-uitls';
 import { settingConst } from '../const/entity-const';
+import { isBrowserSafeHeaderValue, setBrowserSafeHeader } from '../utils/http-header-utils';
 
 function isMissingObjectError(error) {
 	return error?.$metadata?.httpStatusCode === 404
@@ -10,13 +11,14 @@ function isMissingObjectError(error) {
 }
 
 function objectHeaders(result) {
-	const headers = new Headers();
-	headers.set('Content-Type', result.ContentType || 'application/octet-stream');
-	if (result.ContentDisposition) {
-		headers.set('Content-Disposition', result.ContentDisposition);
-	}
-	if (result.CacheControl) {
-		headers.set('Cache-Control', result.CacheControl);
+	const headers = new Headers({ 'Content-Type': 'application/octet-stream' });
+	setBrowserSafeHeader(headers, 'Content-Type', result.ContentType);
+	setBrowserSafeHeader(headers, 'Content-Language', result.ContentLanguage);
+	setBrowserSafeHeader(headers, 'Content-Disposition', result.ContentDisposition);
+	setBrowserSafeHeader(headers, 'Content-Encoding', result.ContentEncoding);
+	setBrowserSafeHeader(headers, 'Cache-Control', result.CacheControl);
+	if (result.Expires instanceof Date && !Number.isNaN(result.Expires.getTime())) {
+		headers.set('Expires', result.Expires.toUTCString());
 	}
 	return headers;
 }
@@ -29,19 +31,17 @@ const s3Service = {
 
 		const { bucket } = await settingService.query(c);
 
-		let obj = { Bucket: bucket, Key: key, Body: content,
-			CacheControl: metadata.cacheControl
-		}
+		const obj = { Bucket: bucket, Key: key, Body: content }
 
-		if (metadata.cacheControl) {
+		if (isBrowserSafeHeaderValue(metadata.cacheControl)) {
 			obj.CacheControl = metadata.cacheControl
 		}
 
-		if (metadata.contentDisposition) {
+		if (isBrowserSafeHeaderValue(metadata.contentDisposition)) {
 			obj.ContentDisposition = metadata.contentDisposition
 		}
 
-		if (metadata.contentType) {
+		if (isBrowserSafeHeaderValue(metadata.contentType)) {
 			obj.ContentType = metadata.contentType
 		}
 

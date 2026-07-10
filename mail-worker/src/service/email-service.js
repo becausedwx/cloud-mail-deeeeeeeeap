@@ -394,18 +394,23 @@ const emailService = {
 		//保存到数据库并返回结果
 		const emailResult = await orm(c).insert(email).values(emailData).returning().get();
 		await emailSearchService.syncEmailIds(c, [emailResult.emailId]);
+		let attList;
+		try {
+			//保存内嵌附件
+			if (imageDataList.length > 0) {
+				await attService.saveArticleAtt(c, imageDataList, userId, accountId, emailResult.emailId);
+			}
 
-		//保存内嵌附件
-		if (imageDataList.length > 0) {
-			await attService.saveArticleAtt(c, imageDataList, userId, accountId, emailResult.emailId);
+			//保存普通附件
+			if (attachments?.length > 0) {
+				await attService.saveSendAtt(c, attachments, userId, accountId, emailResult.emailId);
+			}
+
+			attList = await attService.selectByEmailIds(c, [emailResult.emailId]);
+		} catch (e) {
+			await this.markSendFailed(c, emailResult.emailId, e?.message || String(e));
+			throw e;
 		}
-
-		//保存普通附件
-		if (attachments?.length > 0) {
-			await attService.saveSendAtt(c, attachments, userId, accountId, emailResult.emailId);
-		}
-
-		const attList = await attService.selectByEmailIds(c, [emailResult.emailId]);
 		emailResult.attList = attList;
 
 		if (!allInternal) {
@@ -1198,6 +1203,13 @@ const emailService = {
 		}).where(eq(email.emailId, emailId)).returning().get();
 		await emailSearchService.syncEmailIds(c, [emailId]);
 		return emailRow;
+	},
+
+	async failReceive(c, emailId, message) {
+		await orm(c).update(email).set({
+			status: emailConst.status.FAILED,
+			message
+		}).where(eq(email.emailId, emailId)).run();
 	},
 
 	async completeReceiveAll(c) {

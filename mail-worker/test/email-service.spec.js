@@ -219,6 +219,18 @@ describe('email service status synchronization', () => {
 		expect(emailSearchService.syncEmailIds).toHaveBeenCalledWith(c, [1, 2]);
 	});
 
+	it('marks failed incoming attachment storage without making the email visible', async () => {
+		const c = { env: { db: createDbRecorder().db } };
+
+		await emailService.failReceive(c, 55, 'object upload failed');
+
+		expect(mockState.updates[0]).toEqual({
+			status: emailConst.status.FAILED,
+			message: 'object upload failed'
+		});
+		expect(emailSearchService.syncEmailIds).not.toHaveBeenCalled();
+	});
+
 	it('updates AI-extracted codes only while the code field is still empty', async () => {
 		const recorder = createDbRecorder();
 		const c = { env: { db: recorder.db } };
@@ -306,5 +318,41 @@ describe('email service status synchronization', () => {
 		});
 		expect(emailResult.status).toBe(emailConst.status.DELIVERED);
 		expect(emailResult.resendEmailId).toBe('cf-message-1');
+	});
+
+	it('marks outbound mail failed when local attachment storage fails', async () => {
+		const sendMock = vi.fn();
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+		attService.saveSendAtt.mockRejectedValueOnce(new Error('object upload failed'));
+
+		await expect(emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			sendType: 'new',
+			receiveEmail: ['to@external.example.com'],
+			text: 'Hello',
+			content: '<p>Hello</p>',
+			subject: 'Hello',
+			attachments: [{
+				filename: 'hello.txt',
+				type: 'text/plain',
+				content: 'YQ=='
+			}]
+		}, 1)).rejects.toThrow('object upload failed');
+
+		expect(sendMock).not.toHaveBeenCalled();
+		expect(mockState.updates.at(-1)).toMatchObject({
+			status: emailConst.status.FAILED,
+			message: 'object upload failed'
+		});
 	});
 });

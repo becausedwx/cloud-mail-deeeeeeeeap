@@ -1,3 +1,5 @@
+import { setBrowserSafeHeader } from '../utils/http-header-utils';
+
 const kvObjService = {
 
 	async putObj(c, key, content, metadata) {
@@ -18,19 +20,15 @@ const kvObjService = {
 	},
 
 	async getObj(c, key) {
-		const obj = await c.env.kv.getWithMetadata(key, { type: "arrayBuffer"});
+		const obj = await c.env.kv.getWithMetadata(key, { type: 'stream' });
 		if (!obj.value) {
 			return null;
 		}
 
-		const headers = new Headers();
-		headers.set('Content-Type', obj.metadata?.contentType || 'application/octet-stream');
-		if (obj.metadata?.contentDisposition) {
-			headers.set('Content-Disposition', obj.metadata.contentDisposition);
-		}
-		if (obj.metadata?.cacheControl) {
-			headers.set('Cache-Control', obj.metadata.cacheControl);
-		}
+		const headers = new Headers({ 'Content-Type': 'application/octet-stream' });
+		setBrowserSafeHeader(headers, 'Content-Type', obj.metadata?.contentType);
+		setBrowserSafeHeader(headers, 'Content-Disposition', obj.metadata?.contentDisposition);
+		setBrowserSafeHeader(headers, 'Cache-Control', obj.metadata?.cacheControl);
 
 		return new Response(obj.value, { headers });
 	},

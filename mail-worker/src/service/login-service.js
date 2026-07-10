@@ -232,7 +232,7 @@ const loginService = {
 
 		if (authInfo && (authInfo.user.email === userRow.email)) {
 
-			if (authInfo.tokens.length > 10) {
+			if (authInfo.tokens.length >= 10) {
 				authInfo.tokens.shift();
 			}
 
@@ -257,11 +257,21 @@ const loginService = {
 	},
 
 	async logout(c, userId) {
-		const token =userContext.getToken(c);
+		const token = await userContext.getToken(c);
 		const authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userId, { type: 'json' });
+		if (!authInfo) {
+			return;
+		}
 		const index = authInfo.tokens.findIndex(item => item === token);
+		if (index === -1) {
+			return;
+		}
 		authInfo.tokens.splice(index, 1);
-		await c.env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify(authInfo));
+		if (authInfo.tokens.length === 0) {
+			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
+			return;
+		}
+		await c.env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify(authInfo), { expirationTtl: constant.TOKEN_EXPIRE });
 	}
 
 };
