@@ -40,13 +40,13 @@ describe('scheduled handler', () => {
 		vi.clearAllMocks();
 	});
 
-	it('runs only analysis cache refresh for the half-hour cron', async () => {
+	it('recovers stale incoming mail and refreshes analysis cache on the half-hour cron', async () => {
 		await worker.scheduled({ cron: '*/30 * * * *' }, {}, {});
 
 		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
+		expect(mocks.completeReceiveAll).toHaveBeenCalledTimes(1);
 		expect(mocks.clearRecord).not.toHaveBeenCalled();
 		expect(mocks.resetDaySendCount).not.toHaveBeenCalled();
-		expect(mocks.completeReceiveAll).not.toHaveBeenCalled();
 		expect(mocks.clearNoBindOathUser).not.toHaveBeenCalled();
 		expect(mocks.clearStaleCodes).not.toHaveBeenCalled();
 	});

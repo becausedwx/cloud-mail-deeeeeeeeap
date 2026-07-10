@@ -54,6 +54,7 @@ export default {
 	email: email,
 	async scheduled(c, env, ctx) {
 		if (c.cron === '*/30 * * * *') {
+			await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }))
 			await runScheduledTask('analysis-cache', () => analysisService.refreshEchartsCache({ env }))
 			return;
 		}
