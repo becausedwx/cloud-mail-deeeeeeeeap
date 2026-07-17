@@ -19,12 +19,27 @@ const fileUtils = {
 	},
 
 	base64ToUint8Array(base64) {
-		const binaryStr = atob(base64);
-		const len = binaryStr.length;
-		const bytes = new Uint8Array(len);
-		for (let i = 0; i < len; i++) {
-			bytes[i] = binaryStr.charCodeAt(i);
+		let normalized = base64;
+		if (normalized.includes(' ')
+			|| normalized.includes('\t')
+			|| normalized.includes('\n')
+			|| normalized.includes('\r')
+			|| normalized.includes('\f')) {
+			normalized = normalized.replace(/[\t\n\f\r ]/g, '');
 		}
+
+		const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+		const bytes = new Uint8Array(normalized.length / 4 * 3 - padding);
+		const chunkSize = 32 * 1024;
+		let byteOffset = 0;
+
+		for (let start = 0; start < normalized.length; start += chunkSize) {
+			const binary = atob(normalized.slice(start, start + chunkSize));
+			for (let index = 0; index < binary.length; index++) {
+				bytes[byteOffset++] = binary.charCodeAt(index);
+			}
+		}
+
 		return bytes;
 	},
 

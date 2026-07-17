@@ -25,6 +25,74 @@ import telegramService from './telegram-service';
 import emailSearchService from './email-search-service';
 import { chunkArray, truncateLikeTerm, utf8ByteLength, LIKE_PATTERN_MAX_BYTES } from '../utils/sql-utils';
 
+const CLOUDFLARE_EMAIL_MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
+const RESEND_MAX_MESSAGE_BYTES = 40 * 1000 * 1000;
+const PROVIDER_MESSAGE_OVERHEAD_BYTES = 2 * 1024;
+const PROVIDER_ATTACHMENT_OVERHEAD_BYTES = 1024;
+
+function base64PayloadLength(content) {
+	if (typeof content !== 'string') {
+		return null;
+	}
+
+	let start = 0;
+	if (/^data:/i.test(content)) {
+		const commaIndex = content.indexOf(',');
+		start = commaIndex > -1 ? commaIndex + 1 : 0;
+	}
+
+	let length = 0;
+	for (let index = start; index < content.length; index++) {
+		const code = content.charCodeAt(index);
+		if (code !== 9 && code !== 10 && code !== 12 && code !== 13 && code !== 32) {
+			length++;
+		}
+	}
+	return length;
+}
+
+function attachmentProviderBytes(attachment) {
+	const content = attachment?.content;
+	const encodedLength = base64PayloadLength(content);
+	if (encodedLength !== null) {
+		return encodedLength;
+	}
+
+	let rawSize = 0;
+	if (content instanceof ArrayBuffer || ArrayBuffer.isView(content)) {
+		rawSize = content.byteLength;
+	} else if (typeof Blob !== 'undefined' && content instanceof Blob) {
+		rawSize = content.size;
+	}
+
+	return Math.ceil(rawSize / 3) * 4;
+}
+
+function estimateProviderMessageBytes(params) {
+	let total = PROVIDER_MESSAGE_OVERHEAD_BYTES;
+	for (const value of [
+		params.name,
+		params.accountEmail,
+		params.subject,
+		params.text,
+		params.html,
+		params.messageId
+	]) {
+		total += utf8ByteLength(value);
+	}
+	for (const recipient of params.receiveEmail || []) {
+		total += utf8ByteLength(recipient) + 16;
+	}
+	for (const attachment of params.attachments || []) {
+		total += PROVIDER_ATTACHMENT_OVERHEAD_BYTES;
+		total += utf8ByteLength(attachment.filename);
+		total += utf8ByteLength(attachment.contentType || attachment.mimeType || attachment.type);
+		total += utf8ByteLength(attachment.contentId);
+		total += attachmentProviderBytes(attachment);
+	}
+	return total;
+}
+
 const emailListSelect = {
 	emailId: email.emailId,
 	sendEmail: email.sendEmail,
@@ -360,6 +428,20 @@ const emailService = {
 		];
 		const providerHtml = html;
 
+		if (!allInternal) {
+			this.assertProviderMessageSize({
+				useCloudflareEmail,
+				name,
+				accountEmail: accountRow.email,
+				receiveEmail,
+				subject,
+				text,
+				html: providerHtml,
+				attachments: providerAttachments,
+				messageId: emailRow.messageId
+			});
+		}
+
 		imageDataList = imageDataList.map(item => ({...item, contentId: `<${item.contentId}>`}))
 
 		//把图片标签cid标签切换会通用url
@@ -441,6 +523,16 @@ const emailService = {
 		runInBackground(c, () => this.recordSendMetrics(c, { roleRow, receiveEmail, userId }));
 
 		return [ emailResult ];
+	},
+
+	assertProviderMessageSize(params) {
+		const estimatedBytes = estimateProviderMessageBytes(params);
+		if (params.useCloudflareEmail && estimatedBytes > CLOUDFLARE_EMAIL_MAX_MESSAGE_BYTES) {
+			throw new BizError('Cloudflare Email message exceeds 5 MiB limit', 413);
+		}
+		if (!params.useCloudflareEmail && estimatedBytes > RESEND_MAX_MESSAGE_BYTES) {
+			throw new BizError('Resend message exceeds 40 MB limit', 413);
+		}
 	},
 
 	async sendExternalProvider(c, params) {

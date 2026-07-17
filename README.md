@@ -271,7 +271,14 @@ curl -X POST "https://mail.example.com/api/public/sendEmail" \
     "subject": "自动化通知",
     "content": "<p>任务已完成</p>",
     "text": "任务已完成",
-    "name": "Cloud Mail"
+    "name": "Cloud Mail",
+    "attachments": [
+      {
+        "filename": "report.pdf",
+        "contentType": "application/pdf",
+        "content": "JVBERi0xLjQK"
+      }
+    ]
   }'
 ```
 
@@ -290,7 +297,9 @@ curl -X POST "https://mail.example.com/api/public/sendEmail" \
 }
 ```
 
-接口限制：每次最多 10 个收件人；HTML `content` 最大 1 MB；不支持附件和回复模式；整个部署每小时最多调用 100 次。发件开关、账号归属、角色权限、域名权限和发送额度仍由现有发件链路统一校验。
+附件 `content` 支持标准 Base64，也兼容 `data:*;base64,...`。文件名会去除路径和控制字符；`contentType` 缺失或不合法时使用 `application/octet-stream`。公开调用方传入的 `path`、`url`、`key`、`contentId`、`disposition`、`size` 等字段不会进入核心发件对象，附件仍通过受保护的下载接口访问。
+
+稳定性限制：每次最多 10 个收件人和 10 个附件；单附件解码后最大 10 MiB，附件解码后合计最大 16 MiB；同步 JSON 请求体最大 24 MiB；HTML `content` 最大 1 MB；不支持回复模式；整个部署每小时最多调用 100 次。站外发信还受实际通道限制：Cloudflare Email 整封邮件最大 5 MiB，Resend 整封邮件（附件 Base64 编码后）最大 40 MB，接口会在落库和调用供应商前明确拒绝超限邮件。发件开关、账号归属、角色权限、域名权限和发送额度仍由现有发件链路统一校验。
 
 | `code` | 含义 |
 | --- | --- |
@@ -298,6 +307,7 @@ curl -X POST "https://mail.example.com/api/public/sendEmail" \
 | `401` | 公共令牌缺失或错误 |
 | `403` | 发件关闭，或账号角色、域名、额度不允许发送 |
 | `404` | 发件邮箱账号不存在或已删除 |
+| `413` | JSON 请求体、单附件、附件合计或实际发信通道大小超限 |
 | `429` | 已达到每小时 100 次限制 |
 | `501` | 现有发件链路返回的其他业务错误，例如未配置站外发信通道 |
 

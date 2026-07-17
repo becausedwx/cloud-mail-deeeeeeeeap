@@ -3,8 +3,15 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import dayjs from 'dayjs';
 import KvConst from '../src/const/kv-const';
 import settingService from '../src/service/setting-service';
+import publicService from '../src/service/public-service';
 
 const PUBLIC_TOKEN = 'public-send-test-token';
+const PDF_BASE64 = 'JVBERi0xLjQK';
+
+function base64ForDecodedSize(size) {
+	const padding = (3 - size % 3) % 3;
+	return 'A'.repeat(Math.ceil(size / 3) * 4 - padding) + '='.repeat(padding);
+}
 
 function rateLimitKey() {
 	return `public_send_limit:${dayjs().format('YYYYMMDDHH')}`;
@@ -174,6 +181,110 @@ describe('public send email API', () => {
 		});
 	});
 
+	it.each([
+		['not-an-array', 'attachments must be an array'],
+		[Array.from({ length: 11 }, (_, index) => ({
+			filename: `file-${index}.txt`,
+			content: 'YQ=='
+		})), 'attachments must contain no more than 10 items'],
+		[[{ content: 'YQ==' }], 'attachment filename is required'],
+		[[{ filename: 'empty.txt' }], 'attachment content is required'],
+		[[{ filename: 'invalid.txt', content: 'abc' }], 'attachment content must be valid Base64'],
+		[[{ filename: 'empty.txt', content: '' }], 'attachment content must not be empty']
+	])('validates public attachment input', async (attachments, message) => {
+		const response = await sendEmail(validPayload({ attachments }));
+		const body = await response.json();
+
+		expect(body).toMatchObject({ code: 400, message });
+	});
+
+	it('rejects synchronous JSON bodies over 24 MiB before parsing or writing data', async () => {
+		await seedInternalAccounts();
+		const response = await sendEmail(validPayload({
+			padding: 'x'.repeat(24 * 1024 * 1024)
+		}));
+		const body = await response.json();
+
+		expect(body).toMatchObject({
+			code: 413,
+			message: 'public send JSON body exceeds 24 MiB'
+		});
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM email').first()).toMatchObject({ count: 0 });
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM attachments').first()).toMatchObject({ count: 0 });
+		expect(await env.kv.get(rateLimitKey())).toBeNull();
+	});
+
+	it('keeps requests without attachments backward compatible', async () => {
+		await seedInternalAccounts();
+		await setSendStatus(0);
+
+		const response = await sendEmail(validPayload());
+		const body = await response.json();
+
+		expect(body.code).toBe(200);
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM attachments').first())
+			.toMatchObject({ count: 0 });
+	});
+
+	it('rejects an attachment larger than 10 MiB before writing mail data', async () => {
+		await seedInternalAccounts();
+		const beforeObjects = await env.kv.list({ prefix: 'attachments/' });
+		const content = base64ForDecodedSize(10 * 1024 * 1024 + 1);
+
+		await expect(publicService.sendEmail({ env }, validPayload({
+			attachments: [{ filename: 'too-large.bin', content }]
+		}))).rejects.toMatchObject({
+			code: 413,
+			message: 'attachment exceeds 10 MiB'
+		});
+
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM email').first()).toMatchObject({ count: 0 });
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM attachments').first()).toMatchObject({ count: 0 });
+		expect((await env.kv.list({ prefix: 'attachments/' })).keys).toEqual(beforeObjects.keys);
+	});
+
+	it('accepts a 10 MiB attachment through the bounded JSON path', async () => {
+		await seedInternalAccounts();
+		const content = base64ForDecodedSize(10 * 1024 * 1024);
+
+		const response = await sendEmail(validPayload({
+			attachments: [{ filename: 'maximum.bin', content }]
+		}));
+		const body = await response.json();
+
+		expect(body.code).toBe(200);
+		const { results: rows } = await env.db.prepare(`
+			SELECT key, size
+			FROM attachments
+			ORDER BY att_id
+		`).all();
+		expect(rows).toHaveLength(2);
+		expect(rows.every(row => row.size === 10 * 1024 * 1024)).toBe(true);
+		const object = await env.kv.get(rows[0].key, { type: 'arrayBuffer' });
+		expect(object.byteLength).toBe(10 * 1024 * 1024);
+		await env.kv.delete(rows[0].key);
+	}, 20000);
+
+	it('rejects decoded attachments totaling more than 16 MiB before writing mail data', async () => {
+		await seedInternalAccounts();
+		const beforeObjects = await env.kv.list({ prefix: 'attachments/' });
+		const content = base64ForDecodedSize(4 * 1024 * 1024 + 1);
+
+		await expect(publicService.sendEmail({ env }, validPayload({
+			attachments: Array.from({ length: 4 }, (_, index) => ({
+				filename: `part-${index}.bin`,
+				content
+			}))
+		}))).rejects.toMatchObject({
+			code: 413,
+			message: 'attachments exceed 16 MiB'
+		});
+
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM email').first()).toMatchObject({ count: 0 });
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM attachments').first()).toMatchObject({ count: 0 });
+		expect((await env.kv.list({ prefix: 'attachments/' })).keys).toEqual(beforeObjects.keys);
+	});
+
 	it('sends to an internal recipient through the existing mail pipeline', async () => {
 		await seedInternalAccounts();
 		await setSendStatus(0);
@@ -181,7 +292,11 @@ describe('public send email API', () => {
 		const response = await sendEmail(validPayload({
 			receiveEmail: ['recipient@example.com', 'recipient@example.com'],
 			content: '<p>Internal message</p>',
-			attachments: [{ filename: 'ignored.txt', content: 'aGVsbG8=' }],
+			attachments: [{
+				filename: 'report.pdf',
+				contentType: 'application/pdf',
+				content: PDF_BASE64
+			}],
 			sendType: 'reply',
 			emailId: 99999
 		}));
@@ -216,8 +331,81 @@ describe('public send email API', () => {
 		});
 		expect(rows.find(row => row.type === 1).inReplyTo || '').toBe('');
 
-		const attachmentCount = await env.db.prepare('SELECT COUNT(*) AS count FROM attachments').first();
-		expect(attachmentCount.count).toBe(0);
+		const { results: attachmentRows } = await env.db.prepare(`
+			SELECT a.email_id AS emailId,
+			       a.user_id AS userId,
+			       a.account_id AS accountId,
+			       a.key,
+			       a.filename,
+			       a.mime_type AS mimeType,
+			       a.size,
+			       e.type AS emailType
+			FROM attachments a
+			JOIN email e ON e.email_id = a.email_id
+			ORDER BY a.att_id
+		`).all();
+
+		expect(attachmentRows).toHaveLength(2);
+		expect(attachmentRows.find(row => row.emailType === 1)).toMatchObject({
+			userId: 101,
+			accountId: 201,
+			filename: 'report.pdf',
+			mimeType: 'application/pdf',
+			size: 9
+		});
+		expect(attachmentRows.find(row => row.emailType === 0)).toMatchObject({
+			userId: 102,
+			accountId: 202,
+			filename: 'report.pdf',
+			mimeType: 'application/pdf',
+			size: 9
+		});
+		expect(new Uint8Array(await env.kv.get(attachmentRows[0].key, { type: 'arrayBuffer' })))
+			.toEqual(new TextEncoder().encode('%PDF-1.4\n'));
+	});
+
+	it('normalizes data URL attachments and ignores privileged fields', async () => {
+		await seedInternalAccounts();
+		await setSendStatus(0);
+
+		const response = await sendEmail(validPayload({
+			attachments: [{
+				filename: 'C:\\fakepath\\..\\report.pdf\u0000',
+				contentType: 'not a mime type',
+				content: `data:application/pdf;base64,${PDF_BASE64}`,
+				path: 'https://attacker.example/private.pdf',
+				url: 'https://attacker.example/private.pdf',
+				key: 'attachments/private.pdf',
+				contentId: 'forged-inline',
+				disposition: 'inline',
+				size: 999999
+			}]
+		}));
+		const body = await response.json();
+
+		expect(body.code).toBe(200);
+		const { results: rows } = await env.db.prepare(`
+			SELECT key,
+			       filename,
+			       mime_type AS mimeType,
+			       size,
+			       content_id AS contentId,
+			       disposition
+			FROM attachments
+			ORDER BY att_id
+		`).all();
+
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toMatchObject({
+			filename: 'report.pdf',
+			mimeType: 'application/octet-stream',
+			size: 9,
+			contentId: null,
+			disposition: null
+		});
+		expect(rows[0].key).not.toBe('attachments/private.pdf');
+		expect(new Uint8Array(await env.kv.get(rows[0].key, { type: 'arrayBuffer' })))
+			.toEqual(new TextEncoder().encode('%PDF-1.4\n'));
 	});
 
 	it('honors the existing global send switch', async () => {

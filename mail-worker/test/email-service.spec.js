@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emailConst, isDel, settingConst } from '../src/const/entity-const';
 
+function base64ForDecodedSize(size) {
+	const padding = (3 - size % 3) % 3;
+	return 'A'.repeat(Math.ceil(size / 3) * 4 - padding) + '='.repeat(padding);
+}
+
 const mockState = vi.hoisted(() => ({
 	selectResults: [],
 	updates: [],
@@ -274,6 +279,119 @@ describe('email service status synchronization', () => {
 		expect(sendMock).not.toHaveBeenCalled();
 		expect(mockState.insertValues).toHaveLength(0);
 		expect(attService.saveSendAtt).not.toHaveBeenCalled();
+	});
+
+	it('allows a 3 MiB attachment below the Cloudflare Email limit', async () => {
+		const sendMock = vi.fn(async () => ({ messageId: 'cf-three-mib' }));
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		await emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			receiveEmail: ['to@external.example.com'],
+			text: 'See attachment',
+			content: '<p>See attachment</p>',
+			subject: '3 MiB PDF',
+			attachments: [{
+				filename: 'report.pdf',
+				contentType: 'application/pdf',
+				content: base64ForDecodedSize(3 * 1024 * 1024)
+			}]
+		}, 1);
+
+		expect(sendMock).toHaveBeenCalledOnce();
+		expect(sendMock.mock.calls[0][0].attachments[0]).toMatchObject({
+			filename: 'report.pdf',
+			type: 'application/pdf',
+			disposition: 'attachment'
+		});
+		expect(sendMock.mock.calls[0][0].attachments[0].content.byteLength).toBe(3 * 1024 * 1024);
+	});
+
+	it('rejects Cloudflare Email messages over 5 MiB before persistence', async () => {
+		const sendMock = vi.fn();
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		await expect(emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			receiveEmail: ['to@external.example.com'],
+			text: 'Hello',
+			content: '<p>Hello</p>',
+			subject: 'Hello',
+			attachments: [{
+				filename: 'large.bin',
+				contentType: 'application/octet-stream',
+				content: base64ForDecodedSize(4 * 1024 * 1024)
+			}]
+		}, 1)).rejects.toMatchObject({
+			code: 413,
+			message: 'Cloudflare Email message exceeds 5 MiB limit'
+		});
+
+		expect(mockState.insertValues).toHaveLength(0);
+		expect(attService.saveSendAtt).not.toHaveBeenCalled();
+		expect(sendMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects Resend messages over 40 MB before persistence', async () => {
+		mockState.settingResult.resendTokens = { 'example.com': 're_test' };
+		const providerSpy = vi.spyOn(emailService, 'sendByResend').mockResolvedValue({
+			data: { id: 'resend-message-1' }
+		});
+		const content = base64ForDecodedSize(15 * 1024 * 1024);
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		try {
+			await expect(emailService.send(c, {
+				accountId: 1,
+				name: 'Sender',
+				receiveEmail: ['to@external.example.com'],
+				text: 'Hello',
+				content: '<p>Hello</p>',
+				subject: 'Hello',
+				attachments: [0, 1].map(index => ({
+					filename: `part-${index}.bin`,
+					contentType: 'application/octet-stream',
+					content
+				}))
+			}, 1)).rejects.toMatchObject({
+				code: 413,
+				message: 'Resend message exceeds 40 MB limit'
+			});
+
+			expect(mockState.insertValues).toHaveLength(0);
+			expect(attService.saveSendAtt).not.toHaveBeenCalled();
+			expect(providerSpy).not.toHaveBeenCalled();
+		} finally {
+			providerSpy.mockRestore();
+		}
 	});
 
 	it('persists outbound row and attachments before external provider send', async () => {
