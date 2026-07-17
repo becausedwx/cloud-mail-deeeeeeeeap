@@ -38,6 +38,7 @@ const dbInit = {
 		await this.v3_1DB(c);
 		await this.v3_2DB(c);
 		await this.v3_3DB(c);
+		await this.v3_4DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -167,6 +168,71 @@ const dbInit = {
 		await c.env.db.prepare(`
 			CREATE INDEX IF NOT EXISTS idx_auth_failure_limit_updated_at
 			ON auth_failure_limit (updated_at)
+		`).run();
+	},
+
+	async v3_4DB(c) {
+		await c.env.db.prepare(`
+			CREATE TABLE IF NOT EXISTS oauth_auth_state (
+				state_hash TEXT PRIMARY KEY,
+				code_verifier TEXT NOT NULL,
+				initiator_hash TEXT NOT NULL DEFAULT '',
+				consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed IN (0, 1)),
+				expires_at INTEGER NOT NULL
+			)
+		`).run();
+		const oauthStateColumns = await c.env.db.prepare(`
+			PRAGMA table_info(oauth_auth_state)
+		`).all();
+		const oauthStateColumnNames = new Set(
+			(oauthStateColumns.results || []).map(row => row.name)
+		);
+		if (!oauthStateColumnNames.has('initiator_hash')) {
+			await c.env.db.prepare(`
+				ALTER TABLE oauth_auth_state
+				ADD COLUMN initiator_hash TEXT NOT NULL DEFAULT ''
+			`).run();
+		}
+		if (!oauthStateColumnNames.has('consumed')) {
+			await c.env.db.prepare(`
+				ALTER TABLE oauth_auth_state
+				ADD COLUMN consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed IN (0, 1))
+			`).run();
+		}
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_oauth_auth_state_expires_at
+			ON oauth_auth_state (expires_at)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_oauth_auth_state_initiator_expires_at
+			ON oauth_auth_state (initiator_hash, expires_at)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE TABLE IF NOT EXISTS oauth_bind_challenge (
+				oauth_user_id TEXT PRIMARY KEY,
+				token_hash TEXT NOT NULL UNIQUE,
+				expires_at INTEGER NOT NULL
+			)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_oauth_bind_challenge_expires_at
+			ON oauth_bind_challenge (expires_at)
+		`).run();
+
+		const duplicateOauthIdentity = await c.env.db.prepare(`
+			SELECT 1
+			FROM oauth
+			WHERE oauth_user_id IS NOT NULL
+			GROUP BY platform, oauth_user_id
+			HAVING COUNT(*) > 1
+			LIMIT 1
+		`).first();
+		if (duplicateOauthIdentity) {
+			throw new BizError('Duplicate OAuth identities must be repaired before enabling secure OAuth', 409);
+		}
+		await c.env.db.prepare(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_platform_user_unique
+			ON oauth (platform, oauth_user_id)
 		`).run();
 	},
 

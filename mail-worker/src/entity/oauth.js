@@ -11,6 +11,7 @@ export const oauth = sqliteTable('oauth', {
 	trustLevel: integer('trust_level'),
 	silenced: integer('silenced'),
 	createTime: text('create_time').default(sql`CURRENT_TIMESTAMP`).notNull(),
+	platform: integer('platform').default(0).notNull(),
 	userId: integer('user_id').default(0).notNull()
 });
 

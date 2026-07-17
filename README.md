@@ -324,16 +324,18 @@ curl -X POST "https://mail.example.com/api/public/sendEmail" \
 
 密码与抗爆破：认证和注册 JSON 请求体最大 32 KiB。新密码使用版本化 `PBKDF2-HMAC-SHA256`（当前 `v1` 为 100,000 次迭代、16 字节随机盐、32 字节派生值）。旧版单次 SHA-256 密码仍可登录，并会在普通登录或成功生成公共令牌后渐进升级；条件更新会避免升级过程覆盖并发发生的密码重置。本地 workerd 在 2026-07-17 对 7 次哈希采样为 29–33 ms、p50 30 ms，该结果用于兼顾 Workers 稳定性，不代表生产延迟 SLA。`/api/login` 与 `/api/public/genToken` 分别按“规范化账号 + 来源 IP”的 HMAC 标识，在 PBKDF2 前通过 D1 原子预留尝试槽；10 分钟窗口内“已失败 + 正在验证”最多 5 次，第 5 次失败会锁定 5 分钟，后续请求直接返回 429。中断的验证槽 30 秒后自动失效，成功认证会清理同代记录，过期行每 30 分钟清理。D1 不保存真实 IP、密码、盐或哈希日志。
 
-从旧版本升级后，请使用受初始化密钥保护的 `/api/init`，或在维护中心执行“修复 Schema”，以幂等创建 `public_send_rate_limit`、`auth_failure_limit` 等新增安全表；无需删除或迁移现有邮件、用户和附件。
+LinuxDo OAuth：浏览器会先调用 `POST /api/oauth/linuxDo/authorize`，由 Worker 生成 256-bit 随机 `state` 和 PKCE verifier，并只把 `state` 保存到当前标签页的 `sessionStorage`。LinuxDo 官方 discovery 已声明支持 `S256`，因此授权请求强制携带 S256 challenge；回调必须同时提供匹配的 `code` 与 `state`。服务端只在 D1 保存 state 哈希、verifier 和来源 IP 的 HMAC 标识，不保存原始 IP；state 在 10 分钟内只能原子消费一次，消费后保留到 TTL 到期，缺失、错误、过期、重放及并发重复回调都会在访问 LinuxDo 前失败。每个来源在 10 分钟内最多签发 20 个 state，整个部署同时最多保留 100 个未过期 state，伪造 callback 不能提前释放配额。未绑定用户拿到的是 10 分钟有效的一次性随机绑定令牌，D1 同样只保存其哈希；绑定令牌和 OAuth 身份的并发绑定都只能成功一次。`linuxdo_switch` 关闭时，授权、回调和邮箱绑定三个公开入口都会返回 `403`，不能通过直调 API 绕过页面开关。LinuxDo token 响应缺少 access token，或用户资料缺少合法正整数 ID 时，会在写入 OAuth 身份前以 `502` 失败。D1 限额用于硬性约束写放大，不能替代边缘层抗请求洪水；生产环境仍建议对 `/api/oauth/linuxDo/authorize` 配置 Cloudflare Rate Limiting 或 WAF 粗限流。
+
+从旧版本升级后，请使用受初始化密钥保护的 `/api/init`，或在维护中心执行“修复 Schema”，以幂等创建 `public_send_rate_limit`、`auth_failure_limit`、`oauth_auth_state`、`oauth_bind_challenge` 等新增安全表和 OAuth 唯一索引；无需删除或迁移现有邮件、用户和附件。如果历史 `oauth` 表中已经存在相同 `(platform, oauth_user_id)` 的重复身份，修复会返回 `409` 并拒绝静默建立唯一索引。请先人工核对重复行的绑定关系、保留正确记录后再重新执行修复，避免把不同账号错误合并。
 
 | `code` | 含义 |
 | --- | --- |
-| `400` | 缺少参数、邮箱格式错误、收件人或内容超出限制 |
+| `400` | 缺少参数、邮箱格式错误、收件人或内容超出限制，或 OAuth state / 一次性绑定令牌无效或过期 |
 | `401` | 公共令牌缺失或错误 |
-| `403` | 发件关闭，或账号角色、域名、额度不允许发送 |
+| `403` | 发件或 LinuxDo OAuth 开关关闭，或账号角色、域名、额度不允许发送 |
 | `404` | 发件邮箱账号不存在或已删除 |
 | `413` | 发信或认证 JSON 请求体、单附件、附件合计或实际发信通道大小超限 |
-| `429` | 已达到公共发件每小时 100 次限制，或认证失败次数触发临时锁定 |
+| `429` | 已达到公共发件每小时 100 次限制、OAuth state 签发上限，或认证失败次数触发临时锁定 |
 | `501` | 现有发件链路返回的其他业务错误，例如未配置站外发信通道 |
 
 > 项目沿用统一 JSON 响应格式，业务状态由响应体的 `code` 字段表示。

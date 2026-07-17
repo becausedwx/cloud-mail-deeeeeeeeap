@@ -412,6 +412,7 @@ const zhTw = {
     bind: '繫結',
     bindEmailMsg: '請註冊繫結一個信箱',
     trustLevel: '等級',
-    loginLoading: '登入中...'
+    loginLoading: '登入中...',
+    oauthFlowInvalidMsg: 'LinuxDo 登入驗證已失效，請重新發起登入'
 }
 export default zhTw

@@ -412,6 +412,7 @@ const zh = {
     bind: '绑定',
     bindEmailMsg: '请注册绑定一个邮箱',
     trustLevel: '等级',
-    loginLoading: '登录中...'
+    loginLoading: '登录中...',
+    oauthFlowInvalidMsg: 'LinuxDo 登录验证已失效，请重新发起登录'
 }
 export default zh

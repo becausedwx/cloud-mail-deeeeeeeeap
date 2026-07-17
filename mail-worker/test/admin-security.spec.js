@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import KvConst from '../src/const/kv-const';
 import { dbInit } from '../src/init/init';
 import cryptoUtils from '../src/utils/crypto-utils';
-import jwtUtils from '../src/utils/jwt-utils';
 import userService from '../src/service/user-service';
+import oauthService from '../src/service/oauth-service';
 
 async function initializeDatabase() {
 	const response = await SELF.fetch('http://example.com/api/init', {
@@ -210,28 +210,30 @@ describe('administrator security boundaries', () => {
 			INSERT INTO oauth (oauth_user_id, username, user_id)
 			VALUES (?, ?, 0)
 		`).bind('oauth-admin-attempt', 'attacker').run();
-		const bindToken = await jwtUtils.generateToken(
-			{ env },
-			{ bindOauthUserId: 'oauth-admin-attempt' },
-			600
-		);
+		const bindToken = await oauthService.issueBindToken({ env }, 'oauth-admin-attempt');
 
-		const response = await SELF.fetch('http://example.com/api/oauth/bindUser', {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				email: 'Admin@Example.com',
-				bindToken
-			})
+		await expect(oauthService.bindUser({
+			env: {
+				db: env.db,
+				kv: env.kv,
+				admin: 'admin@example.com',
+				linuxdo_switch: true
+			}
+		}, {
+			email: 'Admin@Example.com',
+			bindToken
+		})).rejects.toMatchObject({
+			code: 403,
+			message: 'Administrator account must be created through the initialization flow'
 		});
-		const body = await response.json();
-
-		expect(body.code).toBe(403);
 		expect(await env.db.prepare(`
 			SELECT COUNT(*) AS count
 			FROM user
 			WHERE email COLLATE NOCASE = ?
 		`).bind('admin@example.com').first()).toMatchObject({ count: 0 });
+		expect(await env.db.prepare(`
+			SELECT 1 FROM oauth_bind_challenge WHERE oauth_user_id = 'oauth-admin-attempt'
+		`).first()).not.toBeNull();
 	});
 
 	it('creates the administrator through the init-secret flow and preserves normal login', async () => {

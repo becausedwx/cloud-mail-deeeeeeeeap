@@ -162,7 +162,13 @@ import {cvtR2Url} from "@/utils/convert.js";
 import {loginUserInfo} from "@/request/my.js";
 import {permsToRouter} from "@/perm/perm.js";
 import {useI18n} from "vue-i18n";
-import {oauthBindUser, oauthLinuxDoLogin} from "@/request/ouath.js";
+import {oauthBindUser, oauthLinuxDoAuthorize, oauthLinuxDoLogin} from "@/request/ouath.js";
+import {
+  LINUXDO_OAUTH_STATE_KEY,
+  consumeLinuxDoCallback,
+  exchangeLinuxDoCallback,
+  prepareLinuxDoAuthorization
+} from "@/views/login/oauth-flow.js";
 
 const {t} = useI18n();
 const accountStore = useAccountStore();
@@ -269,47 +275,64 @@ const getEmailName = (email) => {
   return email.split('@')[0]
 }
 
-function linuxDoLogin() {
-  const clientId = settingStore.settings.linuxdoClientId
-  const redirectUri = encodeURIComponent(settingStore.settings.linuxdoCallbackUrl)
-  window.location.href =
-      `https://connect.linux.do/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=openid+profile+email`
+async function linuxDoLogin() {
+  oauthLoading.value = true
+  try {
+    const authorization = prepareLinuxDoAuthorization(await oauthLinuxDoAuthorize())
+    sessionStorage.setItem(LINUXDO_OAUTH_STATE_KEY, authorization.state)
+    window.location.assign(authorization.authorizationUrl)
+  } catch {
+    try {
+      sessionStorage.removeItem(LINUXDO_OAUTH_STATE_KEY)
+    } catch {
+      // OAuth cannot continue safely when session storage is unavailable.
+    }
+    oauthLoading.value = false
+  }
 }
 
-linuxDoGetUser();
+linuxDoGetUser().catch(() => {
+  oauthLoading.value = false
+});
 
 async function linuxDoGetUser() {
-
-  const params = new URLSearchParams(window.location.search)
-  const code = params.get('code')
-
-  if (code) {
-
-    oauthLoading.value = true
-    oauthLinuxDoLogin(code).then(data => {
-
-      bindForm.bindToken = data.bindToken || '';
-
-      if (!data.token) {
-        showBindForm.value = true
-        oauthLoading.value = false
-        ElMessage({
-          message: t('bindEmailMsg'),
-          type: 'warning',
-          duration: 4000,
-          plain: true,
-        })
-        return;
-      }
-
-      return saveToken(data.token);
-    }).catch(() => {
-      oauthLoading.value = false
-    })
+  const callback = consumeLinuxDoCallback(window.location.href, sessionStorage)
+  if (callback.status === 'none') {
+    return
   }
 
-  const cleanUrl = window.location.origin + window.location.pathname
-  window.history.replaceState({}, '', cleanUrl)
+  window.history.replaceState({}, '', callback.cleanUrl)
+
+  if (callback.status !== 'ready') {
+    ElMessage({
+      message: t('oauthFlowInvalidMsg'),
+      type: 'error',
+      plain: true,
+    })
+    return
+  }
+
+  oauthLoading.value = true
+  try {
+    const data = await exchangeLinuxDoCallback(callback, oauthLinuxDoLogin)
+    bindForm.bindToken = data.bindToken || '';
+
+    if (!data.token) {
+      showBindForm.value = true
+      oauthLoading.value = false
+      ElMessage({
+        message: t('bindEmailMsg'),
+        type: 'warning',
+        duration: 4000,
+        plain: true,
+      })
+      return;
+    }
+
+    await saveToken(data.token);
+  } catch {
+    oauthLoading.value = false
+  }
 }
 
 function bind() {

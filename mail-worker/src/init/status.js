@@ -4,6 +4,8 @@ const REQUIRED_TABLES = [
 	'email_search',
 	'public_send_rate_limit',
 	'auth_failure_limit',
+	'oauth_auth_state',
+	'oauth_bind_challenge',
 	'oauth',
 	'setting',
 	'verify_record',
@@ -16,6 +18,11 @@ const REQUIRED_TABLES = [
 	'email',
 	'star',
 	'attachments'
+];
+
+const REQUIRED_INDEXES = [
+	'idx_oauth_platform_user_unique',
+	'idx_oauth_auth_state_initiator_expires_at'
 ];
 
 function hasText(value) {
@@ -55,16 +62,26 @@ export async function getBootstrapStatus(c) {
 	let adminCreated = false;
 	if (bindings.d1) {
 		try {
-			const placeholders = REQUIRED_TABLES.map(() => '?').join(',');
-			const tableRows = await c.env.db.prepare(`
-				SELECT name
-				FROM sqlite_master
-				WHERE type = 'table' AND name IN (${placeholders})
-			`).bind(...REQUIRED_TABLES).all();
+			const tablePlaceholders = REQUIRED_TABLES.map(() => '?').join(',');
+			const indexPlaceholders = REQUIRED_INDEXES.map(() => '?').join(',');
+			const [tableRows, indexRows] = await Promise.all([
+				c.env.db.prepare(`
+					SELECT name
+					FROM sqlite_master
+					WHERE type = 'table' AND name IN (${tablePlaceholders})
+				`).bind(...REQUIRED_TABLES).all(),
+				c.env.db.prepare(`
+					SELECT name
+					FROM sqlite_master
+					WHERE type = 'index' AND name IN (${indexPlaceholders})
+				`).bind(...REQUIRED_INDEXES).all()
+			]);
 			const tableNames = new Set((tableRows.results || []).map(row => row.name));
+			const indexNames = new Set((indexRows.results || []).map(row => row.name));
 			const hasRequiredTables = REQUIRED_TABLES.every(name => tableNames.has(name));
+			const hasRequiredIndexes = REQUIRED_INDEXES.every(name => indexNames.has(name));
 
-			if (hasRequiredTables) {
+			if (hasRequiredTables && hasRequiredIndexes) {
 				initialized = !!await c.env.db.prepare('SELECT 1 AS initialized FROM setting LIMIT 1').first();
 				if (initialized && configuration.admin) {
 					adminCreated = !!await c.env.db.prepare(`

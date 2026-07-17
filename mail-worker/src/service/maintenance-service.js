@@ -40,6 +40,10 @@ const EXPECTED_INDEXES = [
 	'idx_email_account',
 	'idx_star_email',
 	'idx_oauth_user',
+	'idx_oauth_auth_state_expires_at',
+	'idx_oauth_auth_state_initiator_expires_at',
+	'idx_oauth_bind_challenge_expires_at',
+	'idx_oauth_platform_user_unique',
 	'idx_email_type_create_time',
 	'idx_user_create_time'
 ];
@@ -243,10 +247,12 @@ const maintenanceService = {
 			await dbInit.v3_1DB(c);
 			await dbInit.v3_2DB(c);
 			await dbInit.v3_3DB(c);
+			await dbInit.v3_4DB(c);
 			return this.health(c);
 		}
 
 		if (action === 'indexes') {
+			await dbInit.v3_4DB(c);
 			await dbInit.runOptionalSqlList(c, INDEX_SQL_LIST);
 			return this.health(c);
 		}

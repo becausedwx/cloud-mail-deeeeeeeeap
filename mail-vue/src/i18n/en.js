@@ -412,7 +412,8 @@ const en = {
     bind: 'Bind',
     bindEmailMsg: 'Please register and bind an email address',
     trustLevel: 'Level',
-    loginLoading: 'Logging in...'
+    loginLoading: 'Logging in...',
+    oauthFlowInvalidMsg: 'LinuxDo login verification is invalid or expired. Please try again.'
 }
 
 export default en

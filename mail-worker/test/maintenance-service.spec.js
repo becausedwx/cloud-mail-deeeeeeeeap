@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../src/init/init', () => ({
 	dbInit: {
 		v3_0DB: vi.fn(),
+		v3_4DB: vi.fn(),
 		runOptionalSqlList: vi.fn()
 	}
 }));
@@ -165,6 +166,7 @@ describe('maintenance service', () => {
 
 		await maintenanceService.repair(c, 'indexes');
 
+		expect(dbInit.v3_4DB).toHaveBeenCalledWith(c);
 		const sqlList = dbInit.runOptionalSqlList.mock.calls[0][1].join('\n');
 		expect(sqlList).toContain('idx_email_user_account_type_del_id');
 		expect(sqlList).toContain('idx_email_user_type_del_id');

@@ -57,6 +57,7 @@ export default {
 		if (c.cron === '*/30 * * * *') {
 			await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }))
 			await runScheduledTask('clear-expired-auth-failures', () => authRateLimitService.clearExpired({ env }))
+			await runScheduledTask('clear-expired-oauth-security', () => oauthService.clearExpiredOAuthSecurity({ env }))
 			await runScheduledTask('analysis-cache', () => analysisService.refreshEchartsCache({ env }))
 			return;
 		}

@@ -1,6 +1,7 @@
 const zhTw = {
 	IncorrectPwd: '密碼輸入錯誤',
 	authTooManyFailures: '登入失敗次數過多，請稍後再試',
+	oauthTooManyAuthorizations: 'OAuth 登入請求過於頻繁，請稍後再試',
 	addAccountDisabled: '新增信箱功能已關閉',
 	regDisabled: '註冊功能已關閉',
 	emptyEmail: '信箱不能為空',

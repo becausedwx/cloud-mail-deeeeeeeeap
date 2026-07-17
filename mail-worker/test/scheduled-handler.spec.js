@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
 	resetDaySendCount: vi.fn(),
 	completeReceiveAll: vi.fn(),
 	clearNoBindOathUser: vi.fn(),
+	clearExpiredOAuthSecurity: vi.fn(),
+	clearExpiredAuthFailures: vi.fn(),
 	refreshEchartsCache: vi.fn(),
 	clearStaleCodes: vi.fn()
 }));
@@ -22,7 +24,14 @@ vi.mock('../src/service/email-service', () => ({
 }));
 
 vi.mock('../src/service/oauth-service', () => ({
-	default: { clearNoBindOathUser: mocks.clearNoBindOathUser }
+	default: {
+		clearNoBindOathUser: mocks.clearNoBindOathUser,
+		clearExpiredOAuthSecurity: mocks.clearExpiredOAuthSecurity
+	}
+}));
+
+vi.mock('../src/service/auth-rate-limit-service', () => ({
+	default: { clearExpired: mocks.clearExpiredAuthFailures }
 }));
 
 vi.mock('../src/service/analysis-service', () => ({
@@ -45,6 +54,8 @@ describe('scheduled handler', () => {
 
 		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
 		expect(mocks.completeReceiveAll).toHaveBeenCalledTimes(1);
+		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
+		expect(mocks.clearExpiredOAuthSecurity).toHaveBeenCalledTimes(1);
 		expect(mocks.clearRecord).not.toHaveBeenCalled();
 		expect(mocks.resetDaySendCount).not.toHaveBeenCalled();
 		expect(mocks.clearNoBindOathUser).not.toHaveBeenCalled();
@@ -60,6 +71,7 @@ describe('scheduled handler', () => {
 		expect(mocks.resetDaySendCount).toHaveBeenCalledTimes(1);
 		expect(mocks.completeReceiveAll).toHaveBeenCalledTimes(1);
 		expect(mocks.clearNoBindOathUser).toHaveBeenCalledTimes(1);
+		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
 		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
 		expect(mocks.clearStaleCodes).not.toHaveBeenCalled();
 	});
