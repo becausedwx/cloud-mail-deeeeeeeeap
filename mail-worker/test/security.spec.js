@@ -71,6 +71,23 @@ describe('security hardening', () => {
 		expect(await response.text()).toContain('Resend webhook secret is not configured');
 	});
 
+	it('rejects oversized webhook bodies before signature verification', async () => {
+		const request = new Request('http://example.com/api/webhooks', {
+			method: 'POST',
+			body: 'x'.repeat(256 * 1024 + 1)
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, {
+			...env,
+			resend_webhook_secret: '',
+			resend_webhook_allow_unsigned: ''
+		}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(413);
+		expect(await response.text()).toContain('Resend webhook body exceeds 256 KiB');
+	});
+
 	it('keeps optional migrations idempotent', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const calls = [];

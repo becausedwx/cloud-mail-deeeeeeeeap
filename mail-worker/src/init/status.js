@@ -18,7 +18,8 @@ const REQUIRED_TABLES = [
 	'email',
 	'star',
 	'attachments',
-	'delivery_attempt'
+	'delivery_attempt',
+	'resend_webhook_event'
 ];
 
 const REQUIRED_INDEXES = [
@@ -29,12 +30,37 @@ const REQUIRED_INDEXES = [
 	'idx_attachments_email_status_key',
 	'idx_delivery_attempt_key',
 	'idx_delivery_attempt_status_time',
-	'idx_delivery_attempt_email'
+	'idx_delivery_attempt_email',
+	'idx_delivery_attempt_provider_message',
+	'idx_resend_webhook_event_status_time',
+	'idx_resend_webhook_event_provider_email'
 ];
 
 const REQUIRED_COLUMNS = {
 	email: ['attachment_count', 'recovery_after'],
-	attachments: ['status', 'message']
+	attachments: ['status', 'message'],
+	deliveryAttempt: [
+		'attempt_id',
+		'email_id',
+		'provider',
+		'attempt_key',
+		'status',
+		'provider_message_id',
+		'error_summary',
+		'create_time',
+		'update_time'
+	],
+	resendWebhookEvent: [
+		'event_key',
+		'svix_id',
+		'body_sha256',
+		'event_type',
+		'provider_email_id',
+		'status',
+		'outcome',
+		'received_at',
+		'processed_at'
+	]
 };
 
 function hasText(value) {
@@ -77,7 +103,14 @@ export async function getBootstrapStatus(c) {
 		try {
 			const tablePlaceholders = REQUIRED_TABLES.map(() => '?').join(',');
 			const indexPlaceholders = REQUIRED_INDEXES.map(() => '?').join(',');
-			const [tableRows, indexRows, emailColumnRows, attachmentColumnRows] = await Promise.all([
+			const [
+				tableRows,
+				indexRows,
+				emailColumnRows,
+				attachmentColumnRows,
+				deliveryAttemptColumnRows,
+				resendWebhookEventColumnRows
+			] = await Promise.all([
 				c.env.db.prepare(`
 					SELECT name
 					FROM sqlite_master
@@ -89,7 +122,9 @@ export async function getBootstrapStatus(c) {
 					WHERE type = 'index' AND name IN (${indexPlaceholders})
 				`).bind(...REQUIRED_INDEXES).all(),
 				c.env.db.prepare('PRAGMA table_info(email)').all(),
-				c.env.db.prepare('PRAGMA table_info(attachments)').all()
+				c.env.db.prepare('PRAGMA table_info(attachments)').all(),
+				c.env.db.prepare('PRAGMA table_info(delivery_attempt)').all(),
+				c.env.db.prepare('PRAGMA table_info(resend_webhook_event)').all()
 			]);
 			const tableNames = new Set((tableRows.results || []).map(row => row.name));
 			const indexNames = new Set((indexRows.results || []).map(row => row.name));
@@ -97,8 +132,16 @@ export async function getBootstrapStatus(c) {
 			const hasRequiredIndexes = REQUIRED_INDEXES.every(name => indexNames.has(name));
 			const emailColumnNames = new Set((emailColumnRows.results || []).map(row => row.name));
 			const attachmentColumnNames = new Set((attachmentColumnRows.results || []).map(row => row.name));
+			const deliveryAttemptColumnNames = new Set(
+				(deliveryAttemptColumnRows.results || []).map(row => row.name)
+			);
+			const resendWebhookEventColumnNames = new Set(
+				(resendWebhookEventColumnRows.results || []).map(row => row.name)
+			);
 			const hasRequiredColumns = REQUIRED_COLUMNS.email.every(name => emailColumnNames.has(name))
-				&& REQUIRED_COLUMNS.attachments.every(name => attachmentColumnNames.has(name));
+				&& REQUIRED_COLUMNS.attachments.every(name => attachmentColumnNames.has(name))
+				&& REQUIRED_COLUMNS.deliveryAttempt.every(name => deliveryAttemptColumnNames.has(name))
+				&& REQUIRED_COLUMNS.resendWebhookEvent.every(name => resendWebhookEventColumnNames.has(name));
 			schemaReady = hasRequiredTables && hasRequiredIndexes && hasRequiredColumns;
 
 			if (schemaReady) {

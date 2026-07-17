@@ -34,6 +34,30 @@ const EXPECTED_ATTACHMENT_COLUMNS = [
 	'message'
 ];
 
+const EXPECTED_DELIVERY_ATTEMPT_COLUMNS = [
+	'attempt_id',
+	'email_id',
+	'provider',
+	'attempt_key',
+	'status',
+	'provider_message_id',
+	'error_summary',
+	'create_time',
+	'update_time'
+];
+
+const EXPECTED_RESEND_WEBHOOK_EVENT_COLUMNS = [
+	'event_key',
+	'svix_id',
+	'body_sha256',
+	'event_type',
+	'provider_email_id',
+	'status',
+	'outcome',
+	'received_at',
+	'processed_at'
+];
+
 const EXPECTED_INDEXES = [
 	'idx_email_user_account_type_del_id',
 	'idx_email_user_type_del_id',
@@ -60,6 +84,9 @@ const EXPECTED_INDEXES = [
 	'idx_delivery_attempt_key',
 	'idx_delivery_attempt_status_time',
 	'idx_delivery_attempt_email',
+	'idx_delivery_attempt_provider_message',
+	'idx_resend_webhook_event_status_time',
+	'idx_resend_webhook_event_provider_email',
 	'idx_email_type_create_time',
 	'idx_user_create_time'
 ];
@@ -86,6 +113,9 @@ const INDEX_SQL_LIST = [
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_key ON delivery_attempt(attempt_key);`,
 	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_status_time ON delivery_attempt(status, update_time, attempt_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_email ON delivery_attempt(email_id, attempt_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_provider_message ON delivery_attempt(provider, provider_message_id, attempt_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_status_time ON resend_webhook_event(status, received_at, event_key);`,
+	`CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_provider_email ON resend_webhook_event(provider_email_id, received_at);`,
 	`CREATE INDEX IF NOT EXISTS idx_email_type_create_time ON email(type, create_time);`,
 	`CREATE INDEX IF NOT EXISTS idx_user_create_time ON user(create_time);`,
 	`DROP INDEX IF EXISTS idx_email_user_id_account_id;`
@@ -160,11 +190,16 @@ const maintenanceService = {
 			missingEmailColumns: EXPECTED_EMAIL_COLUMNS,
 			attachmentColumns: [],
 			missingAttachmentColumns: EXPECTED_ATTACHMENT_COLUMNS,
+			deliveryAttemptColumns: [],
+			missingDeliveryAttemptColumns: EXPECTED_DELIVERY_ATTEMPT_COLUMNS,
+			resendWebhookEventColumns: [],
+			missingResendWebhookEventColumns: EXPECTED_RESEND_WEBHOOK_EVENT_COLUMNS,
 			indexes: [],
 			missingIndexes: EXPECTED_INDEXES,
 			emailSearchRows: 0,
 			emailTotal: 0,
 			deliveryAttemptTable: false,
+			resendWebhookEventTable: false,
 			deliveryAttempts: {
 				total: 0,
 				unresolved: 0,
@@ -181,9 +216,12 @@ const maintenanceService = {
 			const [
 				columnRows,
 				attachmentColumnRows,
+				deliveryAttemptColumnRows,
+				resendWebhookEventColumnRows,
 				indexRows,
 				searchTable,
 				deliveryAttemptTable,
+				resendWebhookEventTable,
 				emailCount,
 				searchCount,
 				queryPlan,
@@ -191,9 +229,12 @@ const maintenanceService = {
 			] = await Promise.all([
 				c.env.db.prepare(`PRAGMA table_info(email)`).all(),
 				c.env.db.prepare(`PRAGMA table_info(attachments)`).all(),
+				c.env.db.prepare(`PRAGMA table_info(delivery_attempt)`).all(),
+				c.env.db.prepare(`PRAGMA table_info(resend_webhook_event)`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index'`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'email_search'`).first(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'delivery_attempt'`).first(),
+				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'resend_webhook_event'`).first(),
 				c.env.db.prepare(`SELECT COUNT(*) AS total FROM email`).first().catch(error => {
 					if (isMissingTable(error, 'email')) {
 						return { total: 0 };
@@ -233,11 +274,20 @@ const maintenanceService = {
 			details.attachmentColumns = (attachmentColumnRows.results || []).map(row => row.name);
 			details.missingAttachmentColumns = EXPECTED_ATTACHMENT_COLUMNS
 				.filter(name => !details.attachmentColumns.includes(name));
+			details.deliveryAttemptColumns = (deliveryAttemptColumnRows.results || [])
+				.map(row => row.name);
+			details.missingDeliveryAttemptColumns = EXPECTED_DELIVERY_ATTEMPT_COLUMNS
+				.filter(name => !details.deliveryAttemptColumns.includes(name));
+			details.resendWebhookEventColumns = (resendWebhookEventColumnRows.results || [])
+				.map(row => row.name);
+			details.missingResendWebhookEventColumns = EXPECTED_RESEND_WEBHOOK_EVENT_COLUMNS
+				.filter(name => !details.resendWebhookEventColumns.includes(name));
 			details.indexes = (indexRows.results || []).map(row => row.name);
 			details.missingIndexes = EXPECTED_INDEXES.filter(name => !details.indexes.includes(name));
 			details.emailTotal = emailCount.total;
 			details.emailSearchTable = !!searchTable;
 			details.deliveryAttemptTable = !!deliveryAttemptTable;
+			details.resendWebhookEventTable = !!resendWebhookEventTable;
 			details.deliveryAttempts = deliveryAttempts;
 			details.emailSearchRows = searchCount.total;
 			details.queryPlan = (queryPlan.results || []).map(row => row.detail || '').join(' | ');
@@ -247,15 +297,24 @@ const maintenanceService = {
 				key: 'schema',
 				ok: details.missingEmailColumns.length === 0
 					&& details.missingAttachmentColumns.length === 0
-					&& details.deliveryAttemptTable,
+					&& details.missingDeliveryAttemptColumns.length === 0
+					&& details.missingResendWebhookEventColumns.length === 0
+					&& details.deliveryAttemptTable
+					&& details.resendWebhookEventTable,
 				message: details.missingEmailColumns.length === 0
 					&& details.missingAttachmentColumns.length === 0
+					&& details.missingDeliveryAttemptColumns.length === 0
+					&& details.missingResendWebhookEventColumns.length === 0
 					&& details.deliveryAttemptTable
-					? 'Email, attachment, and delivery attempt schema is complete'
+					&& details.resendWebhookEventTable
+					? 'Email, attachment, delivery attempt, and webhook schema is complete'
 					: `Missing columns: ${[
 						...details.missingEmailColumns.map(name => `email.${name}`),
 						...details.missingAttachmentColumns.map(name => `attachments.${name}`),
-						...(!details.deliveryAttemptTable ? ['table.delivery_attempt'] : [])
+						...details.missingDeliveryAttemptColumns.map(name => `delivery_attempt.${name}`),
+						...details.missingResendWebhookEventColumns.map(name => `resend_webhook_event.${name}`),
+						...(!details.deliveryAttemptTable ? ['table.delivery_attempt'] : []),
+						...(!details.resendWebhookEventTable ? ['table.resend_webhook_event'] : [])
 					].join(', ')}`
 			});
 			checks.push({
@@ -321,6 +380,7 @@ const maintenanceService = {
 			await dbInit.v3_4DB(c);
 			await dbInit.v3_5DB(c);
 			await dbInit.v3_6DB(c);
+			await dbInit.v3_7DB(c);
 			return this.health(c);
 		}
 
@@ -328,6 +388,7 @@ const maintenanceService = {
 			await dbInit.v3_4DB(c);
 			await dbInit.v3_5DB(c);
 			await dbInit.v3_6DB(c);
+			await dbInit.v3_7DB(c);
 			await dbInit.runOptionalSqlList(c, INDEX_SQL_LIST);
 			return this.health(c);
 		}

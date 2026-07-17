@@ -326,7 +326,33 @@ describe('delivery attempt service', () => {
 		expect(indexes.results.map(row => row.name)).toEqual(expect.arrayContaining([
 			'idx_delivery_attempt_key',
 			'idx_delivery_attempt_status_time',
-			'idx_delivery_attempt_email'
+			'idx_delivery_attempt_email',
+			'idx_delivery_attempt_provider_message'
+		]));
+	});
+
+	it('repairs missing delivery attempt columns before creating indexes', async () => {
+		await env.db.prepare('DROP TABLE delivery_attempt').run();
+		await env.db.prepare(`
+			CREATE TABLE delivery_attempt (
+				attempt_id INTEGER PRIMARY KEY AUTOINCREMENT
+			)
+		`).run();
+
+		await dbInit.v3_6DB({ env });
+
+		const columns = await env.db.prepare(`
+			PRAGMA table_info(delivery_attempt)
+		`).all();
+		expect(columns.results.map(row => row.name)).toEqual(expect.arrayContaining([
+			'email_id',
+			'provider',
+			'attempt_key',
+			'status',
+			'provider_message_id',
+			'error_summary',
+			'create_time',
+			'update_time'
 		]));
 	});
 });

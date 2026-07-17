@@ -5,6 +5,65 @@ import secretUtils from '../utils/secret-utils';
 
 const encoder = new TextEncoder();
 
+const WEBHOOK_EVENT_STATUS = Object.freeze({
+	PROCESSING: 'PROCESSING',
+	RETRY: 'RETRY',
+	PROCESSED: 'PROCESSED'
+});
+
+const STATUS_EVENT_TRANSITIONS = Object.freeze({
+	'email.sent': Object.freeze({
+		status: emailConst.status.SENT,
+		allowedStatuses: Object.freeze([emailConst.status.SAVING]),
+		message: null
+	}),
+	'email.delivery_delayed': Object.freeze({
+		status: emailConst.status.DELAYED,
+		allowedStatuses: Object.freeze([
+			emailConst.status.SAVING,
+			emailConst.status.SENT
+		]),
+		message: null
+	}),
+	'email.delivered': Object.freeze({
+		status: emailConst.status.DELIVERED,
+		allowedStatuses: Object.freeze([
+			emailConst.status.SAVING,
+			emailConst.status.SENT,
+			emailConst.status.DELAYED
+		]),
+		message: null
+	}),
+	'email.bounced': Object.freeze({
+		status: emailConst.status.BOUNCED,
+		allowedStatuses: Object.freeze([
+			emailConst.status.SAVING,
+			emailConst.status.SENT,
+			emailConst.status.DELAYED
+		]),
+		message: 'RESEND_BOUNCED'
+	}),
+	'email.complained': Object.freeze({
+		status: emailConst.status.COMPLAINED,
+		allowedStatuses: Object.freeze([
+			emailConst.status.SAVING,
+			emailConst.status.SENT,
+			emailConst.status.DELAYED,
+			emailConst.status.DELIVERED
+		]),
+		message: null
+	}),
+	'email.failed': Object.freeze({
+		status: emailConst.status.FAILED,
+		allowedStatuses: Object.freeze([
+			emailConst.status.SAVING,
+			emailConst.status.SENT,
+			emailConst.status.DELAYED
+		]),
+		message: 'RESEND_DELIVERY_FAILED'
+	})
+});
+
 function isTrueFlag(value) {
 	if (value === true) {
 		return true;
@@ -13,49 +72,215 @@ function isTrueFlag(value) {
 }
 
 const resendService = {
-
 	async webhooks(c, rawBody) {
 		await this.verifyWebhook(c, rawBody);
-		const body = JSON.parse(rawBody);
-
-		const params = {
-			resendEmailId: body.data.email_id,
-			status: emailConst.status.SENT
+		const event = this.parseWebhookBody(rawBody);
+		const identity = await this.createEventIdentity(c, rawBody);
+		const claim = await this.claimEvent(c, {
+			...identity,
+			eventType: event.type,
+			providerEmailId: event.providerEmailId
+		});
+		if (claim.duplicate) {
+			return { duplicate: true, updated: false };
 		}
 
-		if (body.type === 'email.delivered') {
-			params.status = emailConst.status.DELIVERED
-			params.message = null
+		try {
+			if (!event.transition) {
+				await this.finishEvent(c, identity.eventKey, identity.bodySha256, 'NOOP_EVENT');
+				return { duplicate: false, updated: false };
+			}
+
+			const emailRow = await emailService.transitionExternalEmailStatus(c, {
+				resendEmailId: event.providerEmailId,
+				status: event.transition.status,
+				allowedStatuses: [...event.transition.allowedStatuses],
+				message: event.transition.message
+			});
+			const updated = !!emailRow;
+			await this.finishEvent(
+				c,
+				identity.eventKey,
+				identity.bodySha256,
+				updated ? 'UPDATED' : 'NO_CHANGE'
+			);
+			return { duplicate: false, updated };
+		} catch (error) {
+			try {
+				await this.markEventRetry(c, identity.eventKey, identity.bodySha256);
+			} catch {
+				// A stale PROCESSING row can be acquired after the recovery threshold.
+			}
+			throw error;
+		}
+	},
+
+	parseWebhookBody(rawBody) {
+		let body;
+		try {
+			body = JSON.parse(rawBody);
+		} catch {
+			throw new BizError('Invalid webhook JSON', 400);
+		}
+		if (!body || typeof body !== 'object' || Array.isArray(body)) {
+			throw new BizError('Invalid webhook payload', 400);
+		}
+		const type = typeof body.type === 'string' ? body.type.trim() : '';
+		if (!type || type.length > 100) {
+			throw new BizError('Invalid webhook event type', 400);
+		}
+		if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data)) {
+			throw new BizError('Invalid webhook data', 400);
 		}
 
-		if (body.type === 'email.complained') {
-			params.status = emailConst.status.COMPLAINED
-			params.message = null
+		let providerEmailId = body.data.email_id;
+		if (providerEmailId !== undefined && providerEmailId !== null) {
+			providerEmailId = typeof providerEmailId === 'string'
+				? providerEmailId.trim()
+				: '';
+			if (!providerEmailId || providerEmailId.length > 256) {
+				throw new BizError('Invalid webhook email id', 400);
+			}
+		} else {
+			providerEmailId = null;
 		}
 
-		if (body.type === 'email.bounced') {
-			let bounce = body.data.bounce
-			bounce = JSON.stringify(bounce);
-			params.status = emailConst.status.BOUNCED
-			params.message = bounce
+		const transition = STATUS_EVENT_TRANSITIONS[type] || null;
+		if (transition && !providerEmailId) {
+			throw new BizError('Missing webhook email id', 400);
+		}
+		return { type, providerEmailId, transition };
+	},
+
+	async createEventIdentity(c, rawBody) {
+		const bodySha256 = await this.sha256Hex(rawBody);
+		if (c.env.resend_webhook_secret) {
+			const svixId = c.req.header('svix-id');
+			if (typeof svixId !== 'string' || svixId.length === 0 || svixId.length > 200) {
+				throw new BizError('Invalid webhook event id', 400);
+			}
+			return {
+				eventKey: `svix:${svixId}`,
+				svixId,
+				bodySha256
+			};
+		}
+		return {
+			eventKey: `body:${bodySha256}`,
+			svixId: null,
+			bodySha256
+		};
+	},
+
+	async claimEvent(c, event) {
+		const inserted = await c.env.db.prepare(`
+			INSERT INTO resend_webhook_event (
+				event_key,
+				svix_id,
+				body_sha256,
+				event_type,
+				provider_email_id,
+				status
+			) VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(event_key) DO NOTHING
+			RETURNING event_key AS eventKey
+		`).bind(
+			event.eventKey,
+			event.svixId,
+			event.bodySha256,
+			event.eventType,
+			event.providerEmailId,
+			WEBHOOK_EVENT_STATUS.PROCESSING
+		).first();
+		if (inserted) {
+			return { duplicate: false };
 		}
 
-		if (body.type === 'email.delivery_delayed') {
-			params.status = emailConst.status.DELAYED
-			params.message = null
+		const existing = await c.env.db.prepare(`
+			SELECT body_sha256 AS bodySha256, status
+			FROM resend_webhook_event
+			WHERE event_key = ?
+		`).bind(event.eventKey).first();
+		if (!existing) {
+			throw new BizError('Unable to claim webhook event', 503);
 		}
-
-		if (body.type === 'email.failed') {
-			params.status = emailConst.status.FAILED
-			params.message = body.data.failed.reason
+		if (existing.bodySha256 !== event.bodySha256
+			|| existing.status === WEBHOOK_EVENT_STATUS.PROCESSED) {
+			return { duplicate: true };
 		}
-
-		const emailRow = await emailService.updateEmailStatus(c, params)
-
-		if (!emailRow) {
-			throw new BizError('更新邮件状态记录失败');
+		if (existing.status === WEBHOOK_EVENT_STATUS.RETRY) {
+			const acquired = await c.env.db.prepare(`
+				UPDATE resend_webhook_event
+				SET status = ?, received_at = CURRENT_TIMESTAMP
+				WHERE event_key = ? AND body_sha256 = ? AND status = ?
+				RETURNING event_key AS eventKey
+			`).bind(
+				WEBHOOK_EVENT_STATUS.PROCESSING,
+				event.eventKey,
+				event.bodySha256,
+				WEBHOOK_EVENT_STATUS.RETRY
+			).first();
+			return { duplicate: !acquired };
 		}
+		if (existing.status === WEBHOOK_EVENT_STATUS.PROCESSING) {
+			const acquired = await c.env.db.prepare(`
+				UPDATE resend_webhook_event
+				SET received_at = CURRENT_TIMESTAMP
+				WHERE event_key = ?
+				  AND body_sha256 = ?
+				  AND status = ?
+				  AND received_at <= datetime('now', '-1 minute')
+				RETURNING event_key AS eventKey
+			`).bind(
+				event.eventKey,
+				event.bodySha256,
+				WEBHOOK_EVENT_STATUS.PROCESSING
+			).first();
+			return { duplicate: !acquired };
+		}
+		return { duplicate: true };
+	},
 
+	async markEventRetry(c, eventKey, bodySha256) {
+		await c.env.db.prepare(`
+			UPDATE resend_webhook_event
+			SET status = ?, outcome = ?, received_at = CURRENT_TIMESTAMP
+			WHERE event_key = ? AND body_sha256 = ? AND status = ?
+		`).bind(
+			WEBHOOK_EVENT_STATUS.RETRY,
+			'RETRY_PENDING',
+			eventKey,
+			bodySha256,
+			WEBHOOK_EVENT_STATUS.PROCESSING
+		).run();
+	},
+
+	async finishEvent(c, eventKey, bodySha256, outcome) {
+		await c.env.db.prepare(`
+			UPDATE resend_webhook_event
+			SET status = ?,
+				outcome = CASE
+					WHEN outcome = 'UPDATED' OR ? = 'UPDATED' THEN 'UPDATED'
+					ELSE ?
+				END,
+				processed_at = COALESCE(processed_at, CURRENT_TIMESTAMP)
+			WHERE event_key = ?
+			  AND body_sha256 = ?
+			  AND status IN (?, ?)
+		`).bind(
+			WEBHOOK_EVENT_STATUS.PROCESSED,
+			outcome,
+			outcome,
+			eventKey,
+			bodySha256,
+			WEBHOOK_EVENT_STATUS.PROCESSING,
+			WEBHOOK_EVENT_STATUS.PROCESSED
+		).run();
+	},
+
+	async sha256Hex(value) {
+		const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
+		return [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
 	},
 
 	async verifyWebhook(c, rawBody) {
@@ -147,6 +372,6 @@ const resendService = {
 	decodeBase64(value) {
 		return Uint8Array.from(atob(value), c => c.charCodeAt(0));
 	}
-}
+};
 
-export default resendService
+export default resendService;

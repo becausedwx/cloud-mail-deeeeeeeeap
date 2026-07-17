@@ -1168,16 +1168,95 @@ const emailService = {
 		}
 	},
 
-	async updateEmailStatus(c, params) {
-		const { status, resendEmailId, message } = params;
-		const emailRow = await orm(c).update(email).set({
-			status: status,
-			message: message
-		}).where(eq(email.resendEmailId, resendEmailId)).returning().get();
-		if (emailRow) {
-			await emailSearchService.syncEmailIds(c, [emailRow.emailId]);
+	async transitionExternalEmailStatus(c, params) {
+		const resendEmailId = typeof params.resendEmailId === 'string'
+			? params.resendEmailId.trim()
+			: '';
+		const status = Number(params.status);
+		const allowedStatuses = [...new Set(
+			(Array.isArray(params.allowedStatuses) ? params.allowedStatuses : [])
+				.map(Number)
+				.filter(Number.isInteger)
+		)];
+		if (!resendEmailId || resendEmailId.length > 256
+			|| !Number.isInteger(status)
+			|| allowedStatuses.length === 0) {
+			throw new BizError('Invalid external email status transition', 400);
 		}
-		return emailRow;
+		const message = typeof params.message === 'string'
+			? params.message.slice(0, 512)
+			: null;
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const current = await c.env.db.prepare(`
+				SELECT email_id AS emailId, status
+				FROM email
+				WHERE email_id = COALESCE(
+					(
+						SELECT email_id
+						FROM email
+						WHERE type = ? AND resend_email_id = ?
+						ORDER BY email_id
+						LIMIT 1
+					),
+					(
+						SELECT da.email_id
+						FROM delivery_attempt da
+						JOIN email target ON target.email_id = da.email_id
+						WHERE da.provider = ?
+						  AND da.provider_message_id = ?
+						  AND target.type = ?
+						ORDER BY da.attempt_id DESC
+						LIMIT 1
+					)
+				  )
+				  AND type = ?
+				LIMIT 1
+			`).bind(
+				emailConst.type.SEND,
+				resendEmailId,
+				deliveryAttemptConst.provider.RESEND,
+				resendEmailId,
+				emailConst.type.SEND,
+				emailConst.type.SEND
+			).first();
+			if (!current) {
+				return null;
+			}
+			if (Number(current.status) === status) {
+				try {
+					await emailSearchService.syncEmailIds(c, [current.emailId]);
+				} catch {
+					// The authoritative email row is already correct; search can be rebuilt separately.
+				}
+				return current;
+			}
+			if (!allowedStatuses.includes(Number(current.status))) {
+				return null;
+			}
+
+			const emailRow = await c.env.db.prepare(`
+				UPDATE email
+				SET status = ?, message = ?
+				WHERE email_id = ? AND type = ? AND status = ?
+				RETURNING email_id AS emailId, status
+			`).bind(
+				status,
+				message,
+				current.emailId,
+				emailConst.type.SEND,
+				current.status
+			).first();
+			if (!emailRow) {
+				continue;
+			}
+			try {
+				await emailSearchService.syncEmailIds(c, [emailRow.emailId]);
+			} catch {
+				// The authoritative email row is updated; search can be rebuilt separately.
+			}
+			return emailRow;
+		}
+		return null;
 	},
 
 	async selectUserEmailCountList(c, userIds, type, del = isDel.NORMAL) {

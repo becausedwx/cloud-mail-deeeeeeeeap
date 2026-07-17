@@ -9,6 +9,7 @@ vi.mock('../src/init/init', () => ({
 		v3_4DB: vi.fn(),
 		v3_5DB: vi.fn(),
 		v3_6DB: vi.fn(),
+		v3_7DB: vi.fn(),
 		runOptionalSqlList: vi.fn()
 	}
 }));
@@ -213,6 +214,8 @@ describe('maintenance service', () => {
 		expect(result.checks.find(item => item.key === 'deliveryAttempts')).toMatchObject({
 			ok: false
 		});
+		expect(result.details.resendWebhookEventTable).toBe(false);
+		expect(result.details.missingResendWebhookEventColumns).toContain('status');
 	});
 
 	it('rejects repair requests when D1 is not configured', async () => {
@@ -245,6 +248,15 @@ describe('maintenance service', () => {
 			unknown: 1,
 			failed: 1
 		});
+	});
+
+	it('repairs the webhook event schema through the protected schema action', async () => {
+		const c = { env: { db: { prepare: vi.fn() } } };
+		vi.spyOn(maintenanceService, 'health').mockResolvedValue({ ok: true });
+
+		await maintenanceService.repair(c, 'schema');
+
+		expect(dbInit.v3_7DB).toHaveBeenCalledWith(c);
 	});
 
 	it('rebuilds search table in cursor batches without loading every id at once', async () => {

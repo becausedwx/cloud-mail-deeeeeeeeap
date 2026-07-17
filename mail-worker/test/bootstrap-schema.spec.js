@@ -21,7 +21,20 @@ const REQUIRED_TABLES = [
 	'attachments'
 ];
 
-function readyDb({ emailColumns, attachmentColumns, includeDeliveryAttempt = false }) {
+function readyDb({
+	emailColumns,
+	attachmentColumns,
+	includeDeliveryAttempt = false,
+	includeWebhookEvent = false,
+	deliveryAttemptColumns = [
+		'attempt_id', 'email_id', 'provider', 'attempt_key', 'status',
+		'provider_message_id', 'error_summary', 'create_time', 'update_time'
+	],
+	webhookEventColumns = [
+		'event_key', 'svix_id', 'body_sha256', 'event_type', 'provider_email_id',
+		'status', 'outcome', 'received_at', 'processed_at'
+	]
+}) {
 	return {
 		prepare(sql) {
 			return {
@@ -30,9 +43,9 @@ function readyDb({ emailColumns, attachmentColumns, includeDeliveryAttempt = fal
 				},
 				async all() {
 					if (sql.includes("type = 'table'")) {
-						const names = includeDeliveryAttempt
-							? [...REQUIRED_TABLES, 'delivery_attempt']
-							: REQUIRED_TABLES;
+						const names = [...REQUIRED_TABLES];
+						if (includeDeliveryAttempt) names.push('delivery_attempt');
+						if (includeWebhookEvent) names.push('resend_webhook_event');
 						return { results: names.map(name => ({ name })) };
 					}
 					if (sql.includes("type = 'index'")) {
@@ -47,7 +60,14 @@ function readyDb({ emailColumns, attachmentColumns, includeDeliveryAttempt = fal
 							names.push(
 								{ name: 'idx_delivery_attempt_key' },
 								{ name: 'idx_delivery_attempt_status_time' },
-								{ name: 'idx_delivery_attempt_email' }
+								{ name: 'idx_delivery_attempt_email' },
+								{ name: 'idx_delivery_attempt_provider_message' }
+							);
+						}
+						if (includeWebhookEvent) {
+							names.push(
+								{ name: 'idx_resend_webhook_event_status_time' },
+								{ name: 'idx_resend_webhook_event_provider_email' }
 							);
 						}
 						return { results: names };
@@ -57,6 +77,20 @@ function readyDb({ emailColumns, attachmentColumns, includeDeliveryAttempt = fal
 					}
 					if (sql.includes('PRAGMA table_info(attachments)')) {
 						return { results: attachmentColumns.map(name => ({ name })) };
+					}
+					if (sql.includes('PRAGMA table_info(delivery_attempt)')) {
+						return {
+							results: includeDeliveryAttempt
+								? deliveryAttemptColumns.map(name => ({ name }))
+								: []
+						};
+					}
+					if (sql.includes('PRAGMA table_info(resend_webhook_event)')) {
+						return {
+							results: includeWebhookEvent
+								? webhookEventColumns.map(name => ({ name }))
+								: []
+						};
 					}
 					return { results: [] };
 				},
@@ -113,7 +147,8 @@ describe('bootstrap schema readiness', () => {
 				db: readyDb({
 					emailColumns: ['email_id', 'attachment_count', 'recovery_after'],
 					attachmentColumns: ['att_id', 'status', 'message'],
-					includeDeliveryAttempt: true
+					includeDeliveryAttempt: true,
+					includeWebhookEvent: true
 				}),
 				kv: {},
 				assets: {},
@@ -125,5 +160,47 @@ describe('bootstrap schema readiness', () => {
 
 		expect(status.schemaReady).toBe(true);
 		expect(status.ready).toBe(true);
+	});
+
+	it('does not report ready when the Resend webhook event schema is missing', async () => {
+		const status = await getBootstrapStatus({
+			env: {
+				db: readyDb({
+					emailColumns: ['email_id', 'attachment_count', 'recovery_after'],
+					attachmentColumns: ['att_id', 'status', 'message'],
+					includeDeliveryAttempt: true
+				}),
+				kv: {},
+				assets: {},
+				domain: ['example.com'],
+				admin: 'admin@example.com',
+				jwt_secret: 'configured'
+			}
+		});
+
+		expect(status.schemaReady).toBe(false);
+		expect(status.ready).toBe(false);
+	});
+
+	it('does not report ready when a webhook event column is missing', async () => {
+		const status = await getBootstrapStatus({
+			env: {
+				db: readyDb({
+					emailColumns: ['email_id', 'attachment_count', 'recovery_after'],
+					attachmentColumns: ['att_id', 'status', 'message'],
+					includeDeliveryAttempt: true,
+					includeWebhookEvent: true,
+					webhookEventColumns: ['event_key', 'body_sha256']
+				}),
+				kv: {},
+				assets: {},
+				domain: ['example.com'],
+				admin: 'admin@example.com',
+				jwt_secret: 'configured'
+			}
+		});
+
+		expect(status.schemaReady).toBe(false);
+		expect(status.ready).toBe(false);
 	});
 });

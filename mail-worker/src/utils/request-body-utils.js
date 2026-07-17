@@ -1,6 +1,11 @@
 import BizError from '../error/biz-error';
 
-export async function readBoundedJson(c, maxBytes, limitMessage = 'JSON body is too large') {
+export async function readBoundedText(
+	c,
+	maxBytes,
+	limitMessage = 'Request body is too large',
+	invalidMessage = 'invalid request body'
+) {
 	if (!Number.isInteger(maxBytes) || maxBytes <= 0) {
 		throw new TypeError('maxBytes must be a positive integer');
 	}
@@ -12,7 +17,7 @@ export async function readBoundedJson(c, maxBytes, limitMessage = 'JSON body is 
 
 	const body = c.req.raw.body;
 	if (!body) {
-		throw new BizError('invalid JSON body', 400);
+		throw new BizError(invalidMessage, 400);
 	}
 
 	const reader = body.getReader();
@@ -40,11 +45,22 @@ export async function readBoundedJson(c, maxBytes, limitMessage = 'JSON body is 
 		parts.push(decoder.decode());
 	} catch (e) {
 		if (e instanceof BizError) throw e;
-		throw new BizError('invalid JSON body', 400);
+		throw new BizError(invalidMessage, 400);
 	}
 
+	return parts.join('');
+}
+
+export async function readBoundedJson(c, maxBytes, limitMessage = 'JSON body is too large') {
+	const rawBody = await readBoundedText(
+		c,
+		maxBytes,
+		limitMessage,
+		'invalid JSON body'
+	);
+
 	try {
-		return JSON.parse(parts.join(''));
+		return JSON.parse(rawBody);
 	} catch (e) {
 		throw new BizError('invalid JSON body', 400);
 	}

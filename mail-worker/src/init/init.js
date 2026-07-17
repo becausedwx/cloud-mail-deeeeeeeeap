@@ -41,6 +41,7 @@ const dbInit = {
 		await this.v3_4DB(c);
 		await this.v3_5DB(c);
 		await this.v3_6DB(c);
+		await this.v3_7DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -288,6 +289,43 @@ const dbInit = {
 				update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 			)
 		`).run();
+		const deliveryAttemptColumns = await c.env.db.prepare(`
+			PRAGMA table_info(delivery_attempt)
+		`).all();
+		const deliveryAttemptColumnNames = new Set(
+			(deliveryAttemptColumns.results || []).map(row => row.name)
+		);
+		if (!deliveryAttemptColumnNames.has('attempt_id')) {
+			throw new BizError('Delivery attempt table is missing its primary key', 409);
+		}
+		const deliveryAttemptColumnAdditions = [
+			['email_id', 'email_id INTEGER NOT NULL DEFAULT 0'],
+			['provider', "provider TEXT NOT NULL DEFAULT ''"],
+			['attempt_key', 'attempt_key TEXT'],
+			['status', "status TEXT NOT NULL DEFAULT 'UNKNOWN'"],
+			['provider_message_id', 'provider_message_id TEXT'],
+			['error_summary', 'error_summary TEXT'],
+			['create_time', 'create_time DATETIME'],
+			['update_time', 'update_time DATETIME']
+		];
+		for (const [name, definition] of deliveryAttemptColumnAdditions) {
+			if (!deliveryAttemptColumnNames.has(name)) {
+				await c.env.db.prepare(`
+					ALTER TABLE delivery_attempt ADD COLUMN ${definition}
+				`).run();
+			}
+		}
+		await c.env.db.prepare(`
+			UPDATE delivery_attempt
+			SET attempt_key = 'legacy/' || attempt_id
+			WHERE attempt_key IS NULL OR attempt_key = ''
+		`).run();
+		await c.env.db.prepare(`
+			UPDATE delivery_attempt
+			SET create_time = COALESCE(create_time, CURRENT_TIMESTAMP),
+				update_time = COALESCE(update_time, CURRENT_TIMESTAMP)
+			WHERE create_time IS NULL OR update_time IS NULL
+		`).run();
 		await c.env.db.prepare(`
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_key
 			ON delivery_attempt(attempt_key)
@@ -299,6 +337,65 @@ const dbInit = {
 		await c.env.db.prepare(`
 			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_email
 			ON delivery_attempt(email_id, attempt_id)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_provider_message
+			ON delivery_attempt(provider, provider_message_id, attempt_id)
+		`).run();
+	},
+
+	async v3_7DB(c) {
+		await c.env.db.prepare(`
+			CREATE TABLE IF NOT EXISTS resend_webhook_event (
+				event_key TEXT PRIMARY KEY,
+				svix_id TEXT,
+				body_sha256 TEXT NOT NULL,
+				event_type TEXT NOT NULL,
+				provider_email_id TEXT,
+				status TEXT NOT NULL DEFAULT 'PROCESSING',
+				outcome TEXT,
+				received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				processed_at DATETIME
+			)
+		`).run();
+		const webhookColumns = await c.env.db.prepare(`
+			PRAGMA table_info(resend_webhook_event)
+		`).all();
+		const webhookColumnNames = new Set(
+			(webhookColumns.results || []).map(row => row.name)
+		);
+		if (!webhookColumnNames.has('event_key')) {
+			throw new BizError('Webhook event table is missing its primary key', 409);
+		}
+		const webhookColumnAdditions = [
+			['svix_id', 'svix_id TEXT'],
+			['body_sha256', "body_sha256 TEXT NOT NULL DEFAULT ''"],
+			['event_type', "event_type TEXT NOT NULL DEFAULT ''"],
+			['provider_email_id', 'provider_email_id TEXT'],
+			['status', "status TEXT NOT NULL DEFAULT 'PROCESSING'"],
+			['outcome', 'outcome TEXT'],
+			['received_at', 'received_at DATETIME'],
+			['processed_at', 'processed_at DATETIME']
+		];
+		for (const [name, definition] of webhookColumnAdditions) {
+			if (!webhookColumnNames.has(name)) {
+				await c.env.db.prepare(`
+					ALTER TABLE resend_webhook_event ADD COLUMN ${definition}
+				`).run();
+			}
+		}
+		await c.env.db.prepare(`
+			UPDATE resend_webhook_event
+			SET received_at = CURRENT_TIMESTAMP
+			WHERE received_at IS NULL
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_status_time
+			ON resend_webhook_event(status, received_at, event_key)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_provider_email
+			ON resend_webhook_event(provider_email_id, received_at)
 		`).run();
 	},
 
