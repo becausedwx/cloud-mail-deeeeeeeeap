@@ -15,8 +15,13 @@ import email from '../entity/email';
 import userService from './user-service';
 import KvConst from '../const/kv-const';
 import { truncateByBytes, LIKE_PATTERN_MAX_BYTES } from '../utils/sql-utils';
+import accountService from './account-service';
+import emailService from './email-service';
 
 const PUBLIC_PREVIEW_TEXT_LENGTH = 240;
+const PUBLIC_SEND_MAX_RECIPIENTS = 10;
+const PUBLIC_SEND_CONTENT_MAX_BYTES = 1024 * 1024;
+const PUBLIC_SEND_HOURLY_LIMIT = 100;
 
 function toBoolFlag(value) {
 	return value === true || value === 1 || value === '1' || String(value || '').toLowerCase() === 'true';
@@ -53,6 +58,73 @@ function publicEmailSelect(includeContent) {
 }
 
 const publicService = {
+
+	async sendEmail(c, params) {
+		params = params || {};
+		const { sendEmail, receiveEmail, subject, content, text } = params;
+
+		if (typeof sendEmail !== 'string' || !sendEmail.trim()) {
+			throw new BizError('sendEmail is required', 400);
+		}
+		if (receiveEmail === undefined || receiveEmail === null) {
+			throw new BizError('receiveEmail is required', 400);
+		}
+		if (!Array.isArray(receiveEmail)) {
+			throw new BizError('receiveEmail must be an array', 400);
+		}
+		if (receiveEmail.length < 1 || receiveEmail.length > PUBLIC_SEND_MAX_RECIPIENTS) {
+			throw new BizError('receiveEmail must contain between 1 and 10 recipients', 400);
+		}
+
+		const uniqueReceiveEmail = [...new Set(receiveEmail)];
+		if (uniqueReceiveEmail.some(email => typeof email !== 'string' || !verifyUtils.isEmail(email))) {
+			throw new BizError('invalid recipient email', 400);
+		}
+
+		if (typeof subject !== 'string' || !subject.trim()) {
+			throw new BizError('subject is required', 400);
+		}
+		if (subject.length > 998) {
+			throw new BizError('subject exceeds 998 characters', 400);
+		}
+		if (content !== undefined && content !== null && typeof content !== 'string') {
+			throw new BizError('content must be a string', 400);
+		}
+		if (text !== undefined && text !== null && typeof text !== 'string') {
+			throw new BizError('text must be a string', 400);
+		}
+
+		const contentValue = content || '';
+		const textValue = text || '';
+		if (!contentValue.trim() && !textValue.trim()) {
+			throw new BizError('content or text is required', 400);
+		}
+		if (new TextEncoder().encode(contentValue).length > PUBLIC_SEND_CONTENT_MAX_BYTES) {
+			throw new BizError('content exceeds 1MB', 400);
+		}
+
+		const accountRow = await accountService.selectByEmailIncludeDel(c, sendEmail);
+		if (!accountRow || accountRow.isDel !== isDel.NORMAL) {
+			throw new BizError('sender account not found', 404);
+		}
+
+		const rateLimitKey = `public_send_limit:${dayjs().format('YYYYMMDDHH')}`;
+		const sendCount = Number(await c.env.kv.get(rateLimitKey)) || 0;
+		if (sendCount >= PUBLIC_SEND_HOURLY_LIMIT) {
+			throw new BizError('send rate limit exceeded', 429);
+		}
+		await c.env.kv.put(rateLimitKey, String(sendCount + 1), { expirationTtl: 3700 });
+
+		return emailService.send(c, {
+			accountId: accountRow.accountId,
+			name: params.name,
+			receiveEmail: uniqueReceiveEmail,
+			text: textValue,
+			content: contentValue || textValue,
+			subject,
+			attachments: []
+		}, accountRow.userId);
+	},
 
 	async emailList(c, params) {
 

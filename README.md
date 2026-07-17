@@ -253,6 +253,52 @@ cd mail-worker && corepack pnpm vitest run
 cd ../mail-vue && corepack pnpm build
 ```
 
+## 📮 公开自动化发件接口
+
+`POST /api/public/sendEmail` 适合自动化脚本使用。先通过现有的 `POST /api/public/genToken` 获取公共令牌，然后把令牌原样放入 `Authorization` 请求头，不要添加 `Bearer` 前缀。
+
+```bash
+curl -X POST "https://mail.example.com/api/public/sendEmail" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: YOUR_PUBLIC_TOKEN" \
+  -d '{
+    "sendEmail": "noreply@example.com",
+    "receiveEmail": ["recipient@example.com"],
+    "subject": "自动化通知",
+    "content": "<p>任务已完成</p>",
+    "text": "任务已完成",
+    "name": "Cloud Mail"
+  }'
+```
+
+成功响应中的 `data` 直接沿用现有发件链路，类型为邮件结果数组：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": [
+    {
+      "emailId": 123,
+      "status": 6
+    }
+  ]
+}
+```
+
+接口限制：每次最多 10 个收件人；HTML `content` 最大 1 MB；不支持附件和回复模式；整个部署每小时最多调用 100 次。发件开关、账号归属、角色权限、域名权限和发送额度仍由现有发件链路统一校验。
+
+| `code` | 含义 |
+| --- | --- |
+| `400` | 缺少参数、邮箱格式错误、收件人或内容超出限制 |
+| `401` | 公共令牌缺失或错误 |
+| `403` | 发件关闭，或账号角色、域名、额度不允许发送 |
+| `404` | 发件邮箱账号不存在或已删除 |
+| `429` | 已达到每小时 100 次限制 |
+| `501` | 现有发件链路返回的其他业务错误，例如未配置站外发信通道 |
+
+> 项目沿用统一 JSON 响应格式，业务状态由响应体的 `code` 字段表示。
+
 ## 🔍 验证码识别说明
 
 识别分两层：
