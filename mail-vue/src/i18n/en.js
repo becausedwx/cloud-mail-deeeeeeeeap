@@ -45,6 +45,8 @@ const en = {
     repairSchema: 'Repair Schema',
     repairIndexes: 'Repair Indexes',
     rebuildSearch: 'Rebuild Search Table',
+    reconcileDelivery: 'Reconcile Deliveries',
+    deliveryReconcileResult: 'Scanned {scanned}, repaired {repaired}, marked unknown {unknown}, marked failed {failed}',
     repairConfirm: 'This only runs idempotent safe repairs and will not delete real emails, users, or attachments. Continue?',
     repairSuccess: 'Repair completed',
     codeMaintenance: 'Code Maintenance',

@@ -6,6 +6,7 @@ import BizError from '../error/biz-error';
 import { extractCodeByPattern } from './ai-service';
 import { CODE_STALE_MINUTES } from './code-service';
 import { chunkArray, runBatch } from '../utils/sql-utils';
+import deliveryAttemptService from './delivery-attempt-service';
 
 const EXPECTED_EMAIL_COLUMNS = [
 	'email_id',
@@ -56,6 +57,9 @@ const EXPECTED_INDEXES = [
 	'idx_email_receive_recovery',
 	'idx_email_receive_recovery_due',
 	'idx_attachments_email_status_key',
+	'idx_delivery_attempt_key',
+	'idx_delivery_attempt_status_time',
+	'idx_delivery_attempt_email',
 	'idx_email_type_create_time',
 	'idx_user_create_time'
 ];
@@ -79,6 +83,9 @@ const INDEX_SQL_LIST = [
 	`CREATE INDEX IF NOT EXISTS idx_email_receive_recovery ON email(type, status, create_time, email_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_email_receive_recovery_due ON email(type, status, recovery_after, create_time, email_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_attachments_email_status_key ON attachments(email_id, status, key);`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_key ON delivery_attempt(attempt_key);`,
+	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_status_time ON delivery_attempt(status, update_time, attempt_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_email ON delivery_attempt(email_id, attempt_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_email_type_create_time ON email(type, create_time);`,
 	`CREATE INDEX IF NOT EXISTS idx_user_create_time ON user(create_time);`,
 	`DROP INDEX IF EXISTS idx_email_user_id_account_id;`
@@ -157,6 +164,12 @@ const maintenanceService = {
 			missingIndexes: EXPECTED_INDEXES,
 			emailSearchRows: 0,
 			emailTotal: 0,
+			deliveryAttemptTable: false,
+			deliveryAttempts: {
+				total: 0,
+				unresolved: 0,
+				counts: {}
+			},
 			settingsInKv: false,
 			queryPlan: '',
 			usesIndex: false,
@@ -165,11 +178,22 @@ const maintenanceService = {
 
 		if (dbAvailable) {
 			const start = Date.now();
-			const [columnRows, attachmentColumnRows, indexRows, searchTable, emailCount, searchCount, queryPlan] = await Promise.all([
+			const [
+				columnRows,
+				attachmentColumnRows,
+				indexRows,
+				searchTable,
+				deliveryAttemptTable,
+				emailCount,
+				searchCount,
+				queryPlan,
+				deliveryAttempts
+			] = await Promise.all([
 				c.env.db.prepare(`PRAGMA table_info(email)`).all(),
 				c.env.db.prepare(`PRAGMA table_info(attachments)`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index'`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'email_search'`).first(),
+				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'delivery_attempt'`).first(),
 				c.env.db.prepare(`SELECT COUNT(*) AS total FROM email`).first().catch(error => {
 					if (isMissingTable(error, 'email')) {
 						return { total: 0 };
@@ -194,6 +218,12 @@ const maintenanceService = {
 						return { results: [] };
 					}
 					throw error;
+				}),
+				deliveryAttemptService.health(c).catch(error => {
+					if (isMissingTable(error, 'delivery_attempt')) {
+						return { total: 0, unresolved: 0, counts: {} };
+					}
+					throw error;
 				})
 			]);
 
@@ -207,6 +237,8 @@ const maintenanceService = {
 			details.missingIndexes = EXPECTED_INDEXES.filter(name => !details.indexes.includes(name));
 			details.emailTotal = emailCount.total;
 			details.emailSearchTable = !!searchTable;
+			details.deliveryAttemptTable = !!deliveryAttemptTable;
+			details.deliveryAttempts = deliveryAttempts;
 			details.emailSearchRows = searchCount.total;
 			details.queryPlan = (queryPlan.results || []).map(row => row.detail || '').join(' | ');
 			details.usesIndex = /USING .*INDEX/i.test(details.queryPlan);
@@ -214,13 +246,16 @@ const maintenanceService = {
 			checks.push({
 				key: 'schema',
 				ok: details.missingEmailColumns.length === 0
-					&& details.missingAttachmentColumns.length === 0,
+					&& details.missingAttachmentColumns.length === 0
+					&& details.deliveryAttemptTable,
 				message: details.missingEmailColumns.length === 0
 					&& details.missingAttachmentColumns.length === 0
-					? 'Email and attachment schema is complete'
+					&& details.deliveryAttemptTable
+					? 'Email, attachment, and delivery attempt schema is complete'
 					: `Missing columns: ${[
 						...details.missingEmailColumns.map(name => `email.${name}`),
-						...details.missingAttachmentColumns.map(name => `attachments.${name}`)
+						...details.missingAttachmentColumns.map(name => `attachments.${name}`),
+						...(!details.deliveryAttemptTable ? ['table.delivery_attempt'] : [])
 					].join(', ')}`
 			});
 			checks.push({
@@ -236,6 +271,15 @@ const maintenanceService = {
 				message: details.emailSearchTable && details.indexes.includes('idx_email_search_type_status_id')
 					? 'Email search table is available'
 					: 'Email search table or indexes are missing'
+			});
+			checks.push({
+				key: 'deliveryAttempts',
+				ok: details.deliveryAttemptTable && details.deliveryAttempts.unresolved === 0,
+				message: !details.deliveryAttemptTable
+					? 'Delivery attempt table is missing'
+					: details.deliveryAttempts.unresolved === 0
+						? 'No unresolved external delivery attempts'
+						: `${details.deliveryAttempts.unresolved} external delivery attempts require review`
 			});
 		}
 
@@ -255,6 +299,7 @@ const maintenanceService = {
 			repairActions: [
 				{ key: 'schema', label: 'Repair schema' },
 				{ key: 'indexes', label: 'Repair indexes' },
+				{ key: 'delivery-reconcile', label: 'Reconcile delivery attempts' },
 				{ key: 'search', label: 'Rebuild search table' },
 				{ key: 'codes-rescan', label: 'Rescan verification codes' },
 				{ key: 'codes-clean', label: 'Clean false positive codes' },
@@ -275,14 +320,24 @@ const maintenanceService = {
 			await dbInit.v3_3DB(c);
 			await dbInit.v3_4DB(c);
 			await dbInit.v3_5DB(c);
+			await dbInit.v3_6DB(c);
 			return this.health(c);
 		}
 
 		if (action === 'indexes') {
 			await dbInit.v3_4DB(c);
 			await dbInit.v3_5DB(c);
+			await dbInit.v3_6DB(c);
 			await dbInit.runOptionalSqlList(c, INDEX_SQL_LIST);
 			return this.health(c);
+		}
+
+		if (action === 'delivery-reconcile') {
+			const reconcileResult = await deliveryAttemptService.reconcile(c);
+			return this.withMaintenanceResult(c, {
+				action: 'delivery-reconcile',
+				...reconcileResult
+			});
 		}
 
 		if (action === 'search') {

@@ -24,6 +24,7 @@ import { att } from '../entity/att';
 import telegramService from './telegram-service';
 import emailSearchService from './email-search-service';
 import { chunkArray, truncateLikeTerm, utf8ByteLength, LIKE_PATTERN_MAX_BYTES } from '../utils/sql-utils';
+import deliveryAttemptService, { deliveryAttemptConst } from './delivery-attempt-service';
 
 const CLOUDFLARE_EMAIL_MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
 const RESEND_MAX_MESSAGE_BYTES = 40 * 1000 * 1000;
@@ -606,23 +607,58 @@ const emailService = {
 
 	async sendExternalProvider(c, params) {
 		let sendResult = {};
+		const provider = params.useCloudflareEmail
+			? deliveryAttemptConst.provider.CLOUDFLARE_EMAIL
+			: deliveryAttemptConst.provider.RESEND;
+		const attempt = await deliveryAttemptService.prepare(c, {
+			emailId: params.emailId,
+			provider
+		});
+		await deliveryAttemptService.markInFlight(c, attempt.attemptId);
 
 		try {
 			if (params.useCloudflareEmail) {
 				sendResult = await this.sendByCloudflareEmail(c, params);
 			} else {
-				sendResult = await this.sendByResend(params.resendToken, params);
+				sendResult = await this.sendByResend(
+					params.resendToken,
+					params,
+					attempt.attemptKey
+				);
 			}
 		} catch (e) {
-			await this.markSendFailed(c, params.emailId, e?.message || String(e));
-			throw e instanceof BizError ? e : new BizError(e?.message || String(e));
+			try {
+				await deliveryAttemptService.markUnknown(
+					c,
+					attempt.attemptId,
+					'PROVIDER_CALL_UNCERTAIN'
+				);
+			} catch {
+				// A stale IN_FLIGHT row is reconciled to UNKNOWN without calling the provider again.
+			}
+			await this.markSendUnknown(c, params.emailId);
+			throw new BizError('Delivery outcome is unknown; do not retry automatically', 502);
 		}
 
 		const { data, error } = sendResult;
 
 		if (error) {
-			await this.markSendFailed(c, params.emailId, error.message);
+			await deliveryAttemptService.markFailed(
+				c,
+				attempt.attemptId,
+				'PROVIDER_REJECTED'
+			);
+			await this.markSendFailed(c, params.emailId, 'DELIVERY_PROVIDER_REJECTED');
 			throw new BizError(error.message);
+		}
+		try {
+			await deliveryAttemptService.markAccepted(c, attempt.attemptId, data?.id || null);
+		} catch {
+			try {
+				await deliveryAttemptService.markPendingAck(c, attempt.attemptId, data?.id || null);
+			} catch {
+				// A stale IN_FLIGHT attempt will become UNKNOWN rather than being resent.
+			}
 		}
 
 		const status = params.useCloudflareEmail ? emailConst.status.DELIVERED : emailConst.status.SENT;
@@ -650,6 +686,22 @@ const emailService = {
 			await emailSearchService.syncEmailIds(c, [emailId]);
 		} catch (e) {
 			console.error(`Failed to mark outbound email ${emailId} as failed:`, e?.message || e);
+		}
+	},
+
+	async markSendUnknown(c, emailId) {
+		try {
+			await orm(c).update(email).set({
+				status: emailConst.status.SAVING,
+				message: 'DELIVERY_OUTCOME_UNKNOWN'
+			}).where(and(
+				eq(email.emailId, emailId),
+				eq(email.type, emailConst.type.SEND),
+				eq(email.status, emailConst.status.SAVING)
+			)).run();
+			await emailSearchService.syncEmailIds(c, [emailId]);
+		} catch (e) {
+			console.error(`Failed to persist unknown delivery state for email ${emailId}`);
 		}
 	},
 
@@ -705,7 +757,7 @@ const emailService = {
 		};
 	},
 
-	async sendByResend(resendToken, params) {
+	async sendByResend(resendToken, params, idempotencyKey) {
 		const resend = new Resend(resendToken);
 
 		const sendForm = {
@@ -724,7 +776,7 @@ const emailService = {
 			};
 		}
 
-		return await resend.emails.send(sendForm);
+		return await resend.emails.send(sendForm, { idempotencyKey });
 	},
 
 	async toCloudflareAttachments(attachments) {

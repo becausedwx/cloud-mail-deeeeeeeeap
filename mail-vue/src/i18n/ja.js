@@ -45,6 +45,8 @@ const ja = {
     repairSchema: '構造を補完',
     repairIndexes: 'インデックスを補完',
     rebuildSearch: '検索テーブルを再構築',
+    reconcileDelivery: '外部配信を照合',
+    deliveryReconcileResult: '{scanned} 件を確認、{repaired} 件を修復、{unknown} 件を不明、{failed} 件を失敗として記録',
     repairConfirm: 'この操作は冪等な安全修復のみを実行し、実際のメール、ユーザー、添付ファイルは削除されません。続行しますか？',
     repairSuccess: '修復が完了しました',
     codeMaintenance: '認証コードメンテナンス',

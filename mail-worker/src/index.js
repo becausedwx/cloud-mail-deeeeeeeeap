@@ -9,6 +9,7 @@ import attService from './service/att-service';
 import r2Service from './service/r2-service';
 import maintenanceService from './service/maintenance-service';
 import authRateLimitService from './service/auth-rate-limit-service';
+import deliveryAttemptService from './service/delivery-attempt-service';
 
 async function objectResponse(c, key) {
 	const obj = await r2Service.getObj(c, key);
@@ -56,6 +57,7 @@ export default {
 	async scheduled(c, env, ctx) {
 		if (c.cron === '*/30 * * * *') {
 			await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }))
+			await runScheduledTask('delivery-attempt-reconcile', () => deliveryAttemptService.reconcile({ env }))
 			await runScheduledTask('clear-expired-auth-failures', () => authRateLimitService.clearExpired({ env }))
 			await runScheduledTask('clear-expired-oauth-security', () => oauthService.clearExpiredOAuthSecurity({ env }))
 			await runScheduledTask('analysis-cache', () => analysisService.refreshEchartsCache({ env }))
@@ -65,6 +67,7 @@ export default {
 		await runScheduledTask('verify-record-clear', () => verifyRecordService.clearRecord({ env }))
 		await runScheduledTask('reset-day-send-count', () => userService.resetDaySendCount({ env }))
 		await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }))
+		await runScheduledTask('delivery-attempt-reconcile', () => deliveryAttemptService.reconcile({ env }))
 		await runScheduledTask('clear-unbound-oauth-users', () => oauthService.clearNoBindOathUser({ env }))
 		await runScheduledTask('clear-expired-auth-failures', () => authRateLimitService.clearExpired({ env }))
 		if (isEnabled(env.code_clear_stale_cron)) {

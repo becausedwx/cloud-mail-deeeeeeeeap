@@ -45,6 +45,8 @@ const zh = {
     repairSchema: '补齐数据库结构',
     repairIndexes: '补齐索引',
     rebuildSearch: '重建搜索表',
+    reconcileDelivery: '核对外发状态',
+    deliveryReconcileResult: '扫描 {scanned} 条，修复 {repaired} 条，转为未知 {unknown} 条，明确失败 {failed} 条',
     repairConfirm: '该操作只会执行幂等安全修复，不会删除真实邮件、用户或附件数据。确认继续？',
     repairSuccess: '修复完成',
     codeMaintenance: '验证码维护',

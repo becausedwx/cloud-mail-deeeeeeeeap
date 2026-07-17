@@ -123,8 +123,50 @@ vi.mock('../src/service/att-service', () => ({
 	}
 }));
 
+vi.mock('../src/service/delivery-attempt-service', () => ({
+	deliveryAttemptConst: {
+		provider: {
+			CLOUDFLARE_EMAIL: 'CLOUDFLARE_EMAIL',
+			RESEND: 'RESEND'
+		},
+		status: {
+			PREPARED: 'PREPARED',
+			IN_FLIGHT: 'IN_FLIGHT',
+			PENDING_ACK: 'PENDING_ACK',
+			ACCEPTED: 'ACCEPTED',
+			FAILED: 'FAILED',
+			UNKNOWN: 'UNKNOWN'
+		}
+	},
+	default: {
+		prepare: vi.fn(async () => {
+			mockState.operationLog.push({ type: 'attempt-prepared' });
+			return {
+				attemptId: 701,
+				attemptKey: 'cloud-mail/1001/stable-attempt'
+			};
+		}),
+		markInFlight: vi.fn(async () => {
+			mockState.operationLog.push({ type: 'attempt-in-flight' });
+		}),
+		markAccepted: vi.fn(async () => {
+			mockState.operationLog.push({ type: 'attempt-accepted' });
+		}),
+		markPendingAck: vi.fn(async () => {
+			mockState.operationLog.push({ type: 'attempt-pending-ack' });
+		}),
+		markFailed: vi.fn(async () => {
+			mockState.operationLog.push({ type: 'attempt-failed' });
+		}),
+		markUnknown: vi.fn(async () => {
+			mockState.operationLog.push({ type: 'attempt-unknown' });
+		})
+	}
+}));
+
 const { default: emailSearchService } = await import('../src/service/email-search-service');
 const { default: attService } = await import('../src/service/att-service');
+const { default: deliveryAttemptService } = await import('../src/service/delivery-attempt-service');
 const { default: emailService } = await import('../src/service/email-service');
 
 function createDbRecorder(selectRows = [], onRun = null) {
@@ -438,7 +480,10 @@ describe('email service status synchronization', () => {
 
 		const operationTypes = mockState.operationLog.map(operation => operation.type);
 		expect(operationTypes.indexOf('insert')).toBeLessThan(operationTypes.indexOf('saveSendAtt'));
-		expect(operationTypes.indexOf('saveSendAtt')).toBeLessThan(operationTypes.indexOf('provider'));
+		expect(operationTypes.indexOf('saveSendAtt')).toBeLessThan(operationTypes.indexOf('attempt-prepared'));
+		expect(operationTypes.indexOf('attempt-prepared')).toBeLessThan(operationTypes.indexOf('attempt-in-flight'));
+		expect(operationTypes.indexOf('attempt-in-flight')).toBeLessThan(operationTypes.indexOf('provider'));
+		expect(operationTypes.indexOf('provider')).toBeLessThan(operationTypes.indexOf('attempt-accepted'));
 		expect(operationTypes.indexOf('provider')).toBeLessThan(operationTypes.lastIndexOf('update'));
 		expect(mockState.insertValues[0].status).toBe(emailConst.status.SAVING);
 		expect(mockState.updates.at(-1)).toMatchObject({
@@ -447,6 +492,108 @@ describe('email service status synchronization', () => {
 		});
 		expect(emailResult.status).toBe(emailConst.status.DELIVERED);
 		expect(emailResult.resendEmailId).toBe('cf-message-1');
+	});
+
+	it('records PENDING_ACK and returns success when provider acceptance cannot be finalized locally', async () => {
+		const sendMock = vi.fn(async () => ({ messageId: 'cf-message-pending-ack' }));
+		deliveryAttemptService.markAccepted.mockRejectedValueOnce(new Error('temporary D1 failure'));
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		const [emailResult] = await emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			sendType: 'new',
+			receiveEmail: ['to@external.example.com'],
+			text: 'Hello',
+			content: '<p>Hello</p>',
+			subject: 'Hello'
+		}, 1);
+
+		expect(sendMock).toHaveBeenCalledOnce();
+		expect(mockState.operationLog.map(operation => operation.type))
+			.toContain('attempt-pending-ack');
+		expect(emailResult).toMatchObject({
+			status: emailConst.status.DELIVERED,
+			resendEmailId: 'cf-message-pending-ack'
+		});
+	});
+
+	it('passes the stable attempt key to Resend as its idempotency key', async () => {
+		mockState.settingResult.resendTokens = {
+			'example.com': 'test-resend-token'
+		};
+		const providerSpy = vi.spyOn(emailService, 'sendByResend').mockResolvedValue({
+			data: { id: 'resend-message-idempotent' },
+			error: null
+		});
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		try {
+			await emailService.send(c, {
+				accountId: 1,
+				name: 'Sender',
+				sendType: 'new',
+				receiveEmail: ['to@external.example.com'],
+				text: 'Hello',
+				content: '<p>Hello</p>',
+				subject: 'Hello'
+			}, 1);
+
+			expect(providerSpy).toHaveBeenCalledWith(
+				'test-resend-token',
+				expect.objectContaining({ emailId: 1001 }),
+				'cloud-mail/1001/stable-attempt'
+			);
+		} finally {
+			providerSpy.mockRestore();
+		}
+	});
+
+	it('does not create an external delivery attempt for an internal-only send', async () => {
+		const onsiteSpy = vi.spyOn(emailService, 'HandleOnSiteEmail').mockResolvedValue();
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		try {
+			await emailService.send(c, {
+				accountId: 1,
+				name: 'Sender',
+				sendType: 'new',
+				receiveEmail: ['to@internal.example.com'],
+				text: 'Hello',
+				content: '<p>Hello</p>',
+				subject: 'Hello'
+			}, 1);
+
+			expect(onsiteSpy).toHaveBeenCalledOnce();
+			expect(deliveryAttemptService.prepare).not.toHaveBeenCalled();
+		} finally {
+			onsiteSpy.mockRestore();
+		}
 	});
 
 	it('marks outbound mail failed when local attachment storage fails', async () => {
@@ -483,6 +630,113 @@ describe('email service status synchronization', () => {
 			status: emailConst.status.FAILED,
 			message: 'object upload failed'
 		});
+	});
+
+	it('does not call the provider when the durable attempt cannot enter IN_FLIGHT', async () => {
+		const sendMock = vi.fn();
+		deliveryAttemptService.markInFlight.mockRejectedValueOnce(new Error('D1 unavailable'));
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		await expect(emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			sendType: 'new',
+			receiveEmail: ['to@external.example.com'],
+			text: 'Hello',
+			content: '<p>Hello</p>',
+			subject: 'Hello'
+		}, 1)).rejects.toThrow('D1 unavailable');
+
+		expect(deliveryAttemptService.prepare).toHaveBeenCalledOnce();
+		expect(sendMock).not.toHaveBeenCalled();
+		expect(deliveryAttemptService.markAccepted).not.toHaveBeenCalled();
+	});
+
+	it('records an UNKNOWN attempt instead of FAILED when the provider call outcome is ambiguous', async () => {
+		const sendMock = vi.fn(async () => {
+			throw new Error('connection reset after request write');
+		});
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		await expect(emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			sendType: 'new',
+			receiveEmail: ['to@external.example.com'],
+			text: 'Hello',
+			content: '<p>Hello</p>',
+			subject: 'Hello'
+		}, 1)).rejects.toMatchObject({
+			code: 502,
+			message: 'Delivery outcome is unknown; do not retry automatically'
+		});
+
+		const operationTypes = mockState.operationLog.map(operation => operation.type);
+		expect(operationTypes).toContain('attempt-unknown');
+		expect(operationTypes).not.toContain('attempt-failed');
+		expect(mockState.updates.at(-1)).toMatchObject({
+			status: emailConst.status.SAVING,
+			message: 'DELIVERY_OUTCOME_UNKNOWN'
+		});
+	});
+
+	it('marks the attempt and email FAILED when Resend explicitly rejects the request', async () => {
+		mockState.settingResult.resendTokens = {
+			'example.com': 'test-resend-token'
+		};
+		const providerSpy = vi.spyOn(emailService, 'sendByResend').mockResolvedValue({
+			data: null,
+			error: { message: 'domain is not verified' }
+		});
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		try {
+			await expect(emailService.send(c, {
+				accountId: 1,
+				name: 'Sender',
+				sendType: 'new',
+				receiveEmail: ['to@external.example.com'],
+				text: 'Hello',
+				content: '<p>Hello</p>',
+				subject: 'Hello'
+			}, 1)).rejects.toThrow('domain is not verified');
+
+			const operationTypes = mockState.operationLog.map(operation => operation.type);
+			expect(operationTypes).toContain('attempt-failed');
+			expect(operationTypes).not.toContain('attempt-unknown');
+			expect(mockState.updates.at(-1)).toMatchObject({
+				status: emailConst.status.FAILED,
+				message: 'DELIVERY_PROVIDER_REJECTED'
+			});
+		} finally {
+			providerSpy.mockRestore();
+		}
 	});
 
 	it('keeps an atomically reserved send attempt counted when local storage fails', async () => {

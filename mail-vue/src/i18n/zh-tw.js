@@ -45,6 +45,8 @@ const zhTw = {
     repairSchema: '補齊資料庫結構',
     repairIndexes: '補齊索引',
     rebuildSearch: '重建搜尋表',
+    reconcileDelivery: '核對外寄狀態',
+    deliveryReconcileResult: '掃描 {scanned} 筆，修復 {repaired} 筆，轉為未知 {unknown} 筆，明確失敗 {failed} 筆',
     repairConfirm: '該操作只會執行冪等安全修復，不會刪除真實郵件、使用者或附件資料。確認繼續？',
     repairSuccess: '修復完成',
     codeMaintenance: '驗證碼維護',

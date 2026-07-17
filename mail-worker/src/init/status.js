@@ -17,7 +17,8 @@ const REQUIRED_TABLES = [
 	'role_perm',
 	'email',
 	'star',
-	'attachments'
+	'attachments',
+	'delivery_attempt'
 ];
 
 const REQUIRED_INDEXES = [
@@ -25,7 +26,10 @@ const REQUIRED_INDEXES = [
 	'idx_oauth_auth_state_initiator_expires_at',
 	'idx_email_receive_recovery',
 	'idx_email_receive_recovery_due',
-	'idx_attachments_email_status_key'
+	'idx_attachments_email_status_key',
+	'idx_delivery_attempt_key',
+	'idx_delivery_attempt_status_time',
+	'idx_delivery_attempt_email'
 ];
 
 const REQUIRED_COLUMNS = {

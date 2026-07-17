@@ -21,7 +21,7 @@ const REQUIRED_TABLES = [
 	'attachments'
 ];
 
-function readyDb({ emailColumns, attachmentColumns }) {
+function readyDb({ emailColumns, attachmentColumns, includeDeliveryAttempt = false }) {
 	return {
 		prepare(sql) {
 			return {
@@ -30,18 +30,27 @@ function readyDb({ emailColumns, attachmentColumns }) {
 				},
 				async all() {
 					if (sql.includes("type = 'table'")) {
-						return { results: REQUIRED_TABLES.map(name => ({ name })) };
+						const names = includeDeliveryAttempt
+							? [...REQUIRED_TABLES, 'delivery_attempt']
+							: REQUIRED_TABLES;
+						return { results: names.map(name => ({ name })) };
 					}
 					if (sql.includes("type = 'index'")) {
-						return {
-							results: [
+						const names = [
 								{ name: 'idx_oauth_platform_user_unique' },
 								{ name: 'idx_oauth_auth_state_initiator_expires_at' },
 								{ name: 'idx_email_receive_recovery' },
 								{ name: 'idx_email_receive_recovery_due' },
 								{ name: 'idx_attachments_email_status_key' }
-							]
-						};
+							];
+						if (includeDeliveryAttempt) {
+							names.push(
+								{ name: 'idx_delivery_attempt_key' },
+								{ name: 'idx_delivery_attempt_status_time' },
+								{ name: 'idx_delivery_attempt_email' }
+							);
+						}
+						return { results: names };
 					}
 					if (sql.includes('PRAGMA table_info(email)')) {
 						return { results: emailColumns.map(name => ({ name })) };
@@ -77,5 +86,44 @@ describe('bootstrap schema readiness', () => {
 
 		expect(status.initialized).toBe(false);
 		expect(status.ready).toBe(false);
+	});
+
+	it('does not report ready when delivery attempt schema is missing', async () => {
+		const status = await getBootstrapStatus({
+			env: {
+				db: readyDb({
+					emailColumns: ['email_id', 'attachment_count', 'recovery_after'],
+					attachmentColumns: ['att_id', 'status', 'message']
+				}),
+				kv: {},
+				assets: {},
+				domain: ['example.com'],
+				admin: 'admin@example.com',
+				jwt_secret: 'configured'
+			}
+		});
+
+		expect(status.schemaReady).toBe(false);
+		expect(status.ready).toBe(false);
+	});
+
+	it('reports ready when the delivery attempt schema is present', async () => {
+		const status = await getBootstrapStatus({
+			env: {
+				db: readyDb({
+					emailColumns: ['email_id', 'attachment_count', 'recovery_after'],
+					attachmentColumns: ['att_id', 'status', 'message'],
+					includeDeliveryAttempt: true
+				}),
+				kv: {},
+				assets: {},
+				domain: ['example.com'],
+				admin: 'admin@example.com',
+				jwt_secret: 'configured'
+			}
+		});
+
+		expect(status.schemaReady).toBe(true);
+		expect(status.ready).toBe(true);
 	});
 });

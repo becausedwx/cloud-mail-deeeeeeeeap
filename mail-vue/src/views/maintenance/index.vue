@@ -55,6 +55,9 @@
           <el-button type="primary" plain :loading="repairing === 'indexes'" @click="repair('indexes')">
             {{ $t('repairIndexes') }}
           </el-button>
+          <el-button type="warning" plain :loading="repairing === 'delivery-reconcile'" @click="repair('delivery-reconcile')">
+            {{ $t('reconcileDelivery') }}
+          </el-button>
           <el-button type="warning" plain :loading="repairing === 'search'" @click="repair('search')">
             {{ $t('rebuildSearch') }}
           </el-button>
@@ -87,6 +90,9 @@
         <el-descriptions :column="detailColumn" border>
           <el-descriptions-item label="Email Total">{{ health.details?.emailTotal ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="Search Rows">{{ health.details?.emailSearchRows ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="Delivery Attempts">{{ health.details?.deliveryAttempts?.total ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="UNKNOWN">{{ health.details?.deliveryAttempts?.counts?.UNKNOWN ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="PENDING_ACK">{{ health.details?.deliveryAttempts?.counts?.PENDING_ACK ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="Duration">{{ health.details?.durationMs ?? '-' }}ms</el-descriptions-item>
           <el-descriptions-item label="Uses Index">{{ health.details?.usesIndex ? 'Yes' : 'No' }}</el-descriptions-item>
           <el-descriptions-item label="Missing Columns">{{ joinList(health.details?.missingEmailColumns) }}</el-descriptions-item>
@@ -171,6 +177,9 @@ function actionResultText(result) {
   }
   if (result.action === 'codes-rescan' || result.action === 'codes-clean') {
     return t('codeMaintenanceResult', result)
+  }
+  if (result.action === 'delivery-reconcile') {
+    return t('deliveryReconcileResult', result)
   }
   return ''
 }

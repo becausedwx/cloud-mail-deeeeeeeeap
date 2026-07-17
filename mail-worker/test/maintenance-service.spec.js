@@ -3,9 +3,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../src/init/init', () => ({
 	dbInit: {
 		v3_0DB: vi.fn(),
+		v3_1DB: vi.fn(),
+		v3_2DB: vi.fn(),
+		v3_3DB: vi.fn(),
 		v3_4DB: vi.fn(),
 		v3_5DB: vi.fn(),
+		v3_6DB: vi.fn(),
 		runOptionalSqlList: vi.fn()
+	}
+}));
+
+vi.mock('../src/service/delivery-attempt-service', () => ({
+	default: {
+		health: vi.fn(),
+		reconcile: vi.fn()
 	}
 }));
 
@@ -17,6 +28,7 @@ vi.mock('../src/service/email-search-service', () => ({
 
 const { dbInit } = await import('../src/init/init');
 const { default: emailSearchService } = await import('../src/service/email-search-service');
+const { default: deliveryAttemptService } = await import('../src/service/delivery-attempt-service');
 const { default: maintenanceService } = await import('../src/service/maintenance-service');
 
 function createMaintenanceDb(selectBatches = []) {
@@ -60,6 +72,11 @@ describe('maintenance service', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.restoreAllMocks();
+		deliveryAttemptService.health.mockResolvedValue({
+			total: 0,
+			unresolved: 0,
+			counts: {}
+		});
 	});
 
 	it('reports missing bindings without exposing secrets', async () => {
@@ -153,6 +170,51 @@ describe('maintenance service', () => {
 		expect(result.details.missingAttachmentColumns).toContain('message');
 	});
 
+	it('reports unresolved delivery attempts in maintenance health', async () => {
+		deliveryAttemptService.health.mockResolvedValue({
+			total: 3,
+			unresolved: 2,
+			counts: {
+				ACCEPTED: 1,
+				UNKNOWN: 1,
+				PENDING_ACK: 1
+			}
+		});
+		const c = {
+			env: {
+				db: {
+					prepare(sql) {
+						return {
+							bind() {
+								return this;
+							},
+							async all() {
+								return { results: [] };
+							},
+							async first() {
+								return sql.includes('COUNT(*)') ? { total: 0 } : null;
+							}
+						};
+					}
+				}
+			}
+		};
+
+		const result = await maintenanceService.health(c);
+
+		expect(result.details.deliveryAttempts).toMatchObject({
+			total: 3,
+			unresolved: 2,
+			counts: {
+				UNKNOWN: 1,
+				PENDING_ACK: 1
+			}
+		});
+		expect(result.checks.find(item => item.key === 'deliveryAttempts')).toMatchObject({
+			ok: false
+		});
+	});
+
 	it('rejects repair requests when D1 is not configured', async () => {
 		await expect(maintenanceService.repair({ env: {} }, 'indexes')).rejects.toThrow('D1 binding is missing');
 	});
@@ -161,6 +223,28 @@ describe('maintenance service', () => {
 		const c = { env: { db: { prepare: vi.fn() } } };
 
 		await expect(maintenanceService.repair(c, 'unknown')).rejects.toThrow('Unknown maintenance action');
+	});
+
+	it('reconciles delivery attempts without calling an external provider', async () => {
+		const c = { env: { db: { prepare: vi.fn() } } };
+		deliveryAttemptService.reconcile.mockResolvedValue({
+			scanned: 4,
+			repaired: 2,
+			unknown: 1,
+			failed: 1
+		});
+		vi.spyOn(maintenanceService, 'health').mockResolvedValue({ ok: true });
+
+		const result = await maintenanceService.repair(c, 'delivery-reconcile');
+
+		expect(deliveryAttemptService.reconcile).toHaveBeenCalledWith(c);
+		expect(result.lastAction).toEqual({
+			action: 'delivery-reconcile',
+			scanned: 4,
+			repaired: 2,
+			unknown: 1,
+			failed: 1
+		});
 	});
 
 	it('rebuilds search table in cursor batches without loading every id at once', async () => {

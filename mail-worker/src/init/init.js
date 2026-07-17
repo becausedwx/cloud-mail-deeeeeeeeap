@@ -40,6 +40,7 @@ const dbInit = {
 		await this.v3_3DB(c);
 		await this.v3_4DB(c);
 		await this.v3_5DB(c);
+		await this.v3_6DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -270,6 +271,34 @@ const dbInit = {
 		await c.env.db.prepare(`
 			CREATE INDEX IF NOT EXISTS idx_attachments_email_status_key
 			ON attachments(email_id, status, key)
+		`).run();
+	},
+
+	async v3_6DB(c) {
+		await c.env.db.prepare(`
+			CREATE TABLE IF NOT EXISTS delivery_attempt (
+				attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				email_id INTEGER NOT NULL,
+				provider TEXT NOT NULL,
+				attempt_key TEXT NOT NULL,
+				status TEXT NOT NULL,
+				provider_message_id TEXT,
+				error_summary TEXT,
+				create_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				update_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_key
+			ON delivery_attempt(attempt_key)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_status_time
+			ON delivery_attempt(status, update_time, attempt_id)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_email
+			ON delivery_attempt(email_id, attempt_id)
 		`).run();
 	},
 

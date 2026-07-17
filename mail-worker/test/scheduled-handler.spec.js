@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => ({
 	clearExpiredOAuthSecurity: vi.fn(),
 	clearExpiredAuthFailures: vi.fn(),
 	refreshEchartsCache: vi.fn(),
-	clearStaleCodes: vi.fn()
+	clearStaleCodes: vi.fn(),
+	reconcileDeliveryAttempts: vi.fn()
 }));
 
 vi.mock('../src/service/verify-record-service', () => ({
@@ -42,6 +43,10 @@ vi.mock('../src/service/maintenance-service', () => ({
 	default: { clearStaleCodes: mocks.clearStaleCodes }
 }));
 
+vi.mock('../src/service/delivery-attempt-service', () => ({
+	default: { reconcile: mocks.reconcileDeliveryAttempts }
+}));
+
 const { default: worker } = await import('../src/index');
 
 describe('scheduled handler', () => {
@@ -54,6 +59,7 @@ describe('scheduled handler', () => {
 
 		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
 		expect(mocks.completeReceiveAll).toHaveBeenCalledTimes(1);
+		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledTimes(1);
 		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
 		expect(mocks.clearExpiredOAuthSecurity).toHaveBeenCalledTimes(1);
 		expect(mocks.clearRecord).not.toHaveBeenCalled();
@@ -70,6 +76,7 @@ describe('scheduled handler', () => {
 		expect(mocks.clearRecord).toHaveBeenCalledTimes(1);
 		expect(mocks.resetDaySendCount).toHaveBeenCalledTimes(1);
 		expect(mocks.completeReceiveAll).toHaveBeenCalledTimes(1);
+		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledTimes(1);
 		expect(mocks.clearNoBindOathUser).toHaveBeenCalledTimes(1);
 		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
 		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
