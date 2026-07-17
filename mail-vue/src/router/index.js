@@ -70,6 +70,11 @@ const routes = [
         component: () => import('@/views/login/index.vue')
     },
     {
+        path: '/setup',
+        name: 'setup',
+        component: () => import('@/views/setup/index.vue')
+    },
+    {
         path: '/test',
         name: 'test',
         component: () => import('@/views/test/index.vue')
@@ -109,6 +114,16 @@ router.beforeEach((to, from, next) => {
     }
 
     const token = localStorage.getItem('token')
+    const settingStore = useSettingStore()
+    const setupRequired = settingStore.settings?.ready === false
+
+    if (setupRequired) {
+        return to.name === 'setup' ? next() : next({name: 'setup'})
+    }
+
+    if (to.name === 'setup') {
+        return next(token ? {name: 'layout'} : {name: 'login'})
+    }
 
     if (!token && to.name !== 'login') {
         return next({name: 'login'})

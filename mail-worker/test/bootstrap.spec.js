@@ -1,0 +1,84 @@
+import { createExecutionContext, SELF, waitOnExecutionContext } from 'cloudflare:test';
+import { describe, expect, it } from 'vitest';
+import worker from '../src';
+
+describe('first deployment bootstrap', () => {
+	it('reports missing bindings and variables without throwing', async () => {
+		const request = new Request('http://example.com/api/init/status');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, {}, ctx);
+		await waitOnExecutionContext(ctx);
+		const body = await response.json();
+
+		expect(body).toMatchObject({
+			code: 200,
+			data: {
+				initialized: false,
+				ready: false,
+				bindings: { d1: false, kv: false, assets: false },
+				configuration: { domain: false, admin: false, initSecret: false }
+			}
+		});
+	});
+
+	it('keeps the setup page usable before initialization and becomes ready after init', async () => {
+		const statusBeforeResponse = await SELF.fetch('http://example.com/api/init/status');
+		expect(statusBeforeResponse.status).toBe(200);
+		const statusBefore = await statusBeforeResponse.json();
+		expect(statusBefore).toMatchObject({
+			code: 200,
+			data: {
+				initialized: false,
+				ready: false
+			}
+		});
+		const serializedStatus = JSON.stringify(statusBefore);
+		expect(serializedStatus).not.toContain('jwt_secret');
+		expect(serializedStatus).not.toContain('your-jwt-secret');
+		expect(serializedStatus).not.toContain('admin@example.com');
+		expect(serializedStatus).not.toContain('example.com');
+
+		const configBeforeResponse = await SELF.fetch('http://example.com/api/setting/websiteConfig');
+		expect(configBeforeResponse.status).toBe(200);
+		const configBefore = await configBeforeResponse.json();
+		expect(configBefore).toMatchObject({
+			code: 200,
+			data: {
+				initialized: false,
+				register: 1,
+				domainList: []
+			}
+		});
+
+		const maintenanceResponse = await SELF.fetch('http://example.com/api/maintenance/health');
+		const maintenanceBefore = await maintenanceResponse.json();
+		expect(maintenanceBefore.code).toBe(401);
+
+		const initResponse = await SELF.fetch('http://example.com/api/init', {
+			method: 'POST',
+			headers: { 'X-Cloud-Mail-Init-Secret': 'your-jwt-secret' }
+		});
+		expect(initResponse.status).toBe(200);
+		expect(await initResponse.text()).toBe('success');
+
+		const statusAfterResponse = await SELF.fetch('http://example.com/api/init/status');
+		const statusAfter = await statusAfterResponse.json();
+		expect(statusAfter).toMatchObject({
+			code: 200,
+			data: {
+				initialized: true,
+				ready: true
+			}
+		});
+
+		const configAfterResponse = await SELF.fetch('http://example.com/api/setting/websiteConfig');
+		const configAfter = await configAfterResponse.json();
+		expect(configAfter).toMatchObject({
+			code: 200,
+			data: {
+				initialized: true,
+				ready: true
+			}
+		});
+	});
+});

@@ -20,4 +20,13 @@ describe('jwt utils', () => {
 		vi.setSystemTime(new Date('2026-06-08T00:01:01Z'));
 		await expect(jwtUtils.verifyToken(c, token)).resolves.toBeNull();
 	});
+
+	it('returns null quietly when no token is supplied', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+		await expect(jwtUtils.verifyToken({ env: { jwt_secret: 'test-secret' } })).resolves.toBeNull();
+		expect(warn).not.toHaveBeenCalled();
+
+		warn.mockRestore();
+	});
 });

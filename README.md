@@ -153,6 +153,10 @@ node ../scripts/cloudflare-workers-git-deploy.mjs
 - `CF_EMAIL` 填 `true` 时启用 Cloudflare Email 发信绑定
 - `CLOUD_MAIL_WRANGLER_VERSION` 可选，默认 `4.92.0`
 
+> Git 集成脚本只负责构建和部署，无法在 Worker 上线前初始化远程 D1。首次部署打开站点会进入 `/setup`，页面会检查绑定和变量，并给出使用 `POST /api/init` 的初始化命令。初始化密钥只放在请求头，不会由页面读取或保存。
+
+`GET /api/init/status` 是公开的只读启动检查接口，只返回 D1、KV 和必需变量是否已配置等布尔状态，不返回资源 ID、变量内容或密钥。
+
 已有生产数据时，**务必确认三项指向旧资源**：
 
 ```text
@@ -182,7 +186,7 @@ cd mail-worker
 corepack pnpm wrangler deploy
 ```
 
-首次部署后用 POST 初始化数据库（不要把 `jwt_secret` 放在 URL 里）：
+首次部署会进入 `/setup`。按页面提示使用 POST 初始化数据库（不要把 `jwt_secret` 放在 URL 里）：
 
 ```bash
 curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域名/api/init
@@ -193,15 +197,15 @@ curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域�
 </details>
 
 <details>
-<summary><b>方式三：GitHub Actions 自动部署</b></summary>
+<summary><b>方式三：GitHub Actions 手动兼容部署</b></summary>
 
-仓库包含 `.github/workflows/deploy-cloudflare.yml`，推送 `main` 且改动相关路径时触发。
+仓库包含 `.github/workflows/deploy-cloudflare.yml`。该工作流目前仅支持从 Actions 页面手动触发，并且必须把 `confirm_legacy_deploy` 填为 `true`；推送 `main` 不会自动运行，避免与 Cloudflare Workers Git 集成重复部署。
 
 建议配置以下 Secrets / Variables：
 
 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`CUSTOM_DOMAIN`、`DOMAIN`、`ADMIN`、`JWT_SECRET`、`D1_DATABASE_NAME`、`D1_DATABASE_ID`、`KV_NAMESPACE_ID`，以及可选的 `R2_BUCKET_NAME`、`RESEND_WEBHOOK_SECRET`（推荐）、`RESEND_WEBHOOK_ALLOW_UNSIGNED`、`CORS_ORIGINS`。
 
-工作流自动完成：安装依赖 → 生成 `wrangler-action.toml` → 检查/填充 D1、KV 绑定 → 构建前端并部署 → 通过 `POST /api/init` 初始化数据库。
+手动工作流执行后会完成：安装依赖 → 生成 `wrangler-action.toml` → 检查/填充 D1、KV 绑定 → 构建前端并部署 → 通过 `POST /api/init` 初始化数据库。
 
 </details>
 
@@ -209,8 +213,8 @@ curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域�
 
 1. 构建日志中没有 `Framework: Static` / `Output Directory: mail-vue` / `Create wrangler.jsonc` 等误识别提示。
 2. Wrangler 输出的绑定里能看到 `env.db`、`env.kv`、`env.assets`。
-3. 已配置 `domain`、`admin`、`jwt_secret` 等运行时变量，敏感值使用 Secrets。
-4. 执行 `curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域名/api/init` 返回 `success`。
+3. 打开 `/setup`，确认 D1、KV、`domain`、`admin`、`jwt_secret` 均显示已就绪。
+4. 按 `/setup` 提示执行 `curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域名/api/init`，返回 `success` 后点击「重新检测」。
 5. 登录后台 → 维护中心，检查 D1 / KV / R2 / AI / 发信绑定状态。
 6. 如提示缺字段、缺索引或缺搜索表，按顺序执行「补齐数据库结构」「补齐索引」「重建搜索表」。
 7. 进入系统设置，配置域名、管理员、Resend、公告、验证码识别等业务选项。

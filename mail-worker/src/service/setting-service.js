@@ -9,6 +9,7 @@ import BizError from '../error/biz-error';
 import {t} from '../i18n/i18n'
 import verifyRecordService from './verify-record-service';
 import userContext from '../security/user-context';
+import { createBootstrapWebsiteConfig, getBootstrapStatus } from '../init/status';
 
 const SETTING_CACHE_TTL = 30 * 1000;
 let settingCache = null;
@@ -267,11 +268,18 @@ const settingService = {
 	},
 
 	async websiteConfig(c) {
+		const bootstrap = await getBootstrapStatus(c);
+		if (!bootstrap.ready) {
+			return createBootstrapWebsiteConfig(bootstrap);
+		}
 
 		const settingRow = await this.get(c, true);
 		const token = await userContext.getToken(c);
 
 		return {
+			initialized: true,
+			ready: true,
+			bootstrap,
 			register: settingRow.register,
 			title: settingRow.title,
 			manyEmail: settingRow.manyEmail,
