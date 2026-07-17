@@ -12,6 +12,8 @@ import userService from '../service/user-service';
 import telegramService from '../service/telegram-service';
 import aiService from '../service/ai-service';
 
+const INCOMING_ATTACHMENT_LIMIT = 10;
+
 export async function email(message, env, ctx) {
 
 	try {
@@ -39,6 +41,11 @@ export async function email(message, env, ctx) {
 		}
 
 		const email = await PostalMime.parse(message.raw);
+		const incomingAttachments = Array.isArray(email.attachments) ? email.attachments : [];
+		if (incomingAttachments.length > INCOMING_ATTACHMENT_LIMIT) {
+			message.setReject('Too many attachments');
+			return;
+		}
 
 
 		const blockFlag = checkBlock(blackSubject, blackContent, blackFrom, email);
@@ -110,7 +117,7 @@ export async function email(message, env, ctx) {
 		const attachments = [];
 		const cidAttachments = [];
 
-		for (let item of email.attachments) {
+		for (let item of incomingAttachments) {
 			let attachment = { ...item };
 			attachment.key = constant.ATTACHMENT_PREFIX + await fileUtils.getBuffHash(attachment.content) + fileUtils.getExtFileName(item.filename);
 			attachment.size = item.content.length ?? item.content.byteLength;
@@ -119,6 +126,8 @@ export async function email(message, env, ctx) {
 				cidAttachments.push(attachment);
 			}
 		}
+
+		params.attachmentCount = attachments.length;
 
 		let emailRow = await emailService.receive({ env }, params, cidAttachments, r2Domain);
 
@@ -132,7 +141,12 @@ export async function email(message, env, ctx) {
 			try {
 				await attService.addAtt({ env }, attachments);
 			} catch (e) {
-				await emailService.failReceive({ env }, emailRow.emailId, e?.message || String(e));
+				if (!e?.attachmentRecoveryPending) {
+					const failureCode = e?.code === 'ATTACHMENT_OBJECT_WRITE_FAILED'
+						? e.code
+						: 'ATTACHMENT_STORAGE_FAILED';
+					await emailService.failReceive({ env }, emailRow.emailId, failureCode);
+				}
 				throw e;
 			}
 		}
@@ -193,7 +207,7 @@ export async function email(message, env, ctx) {
 		}
 
 	} catch (e) {
-		console.error('邮件接收异常: ', e);
+		console.error('Incoming email failed:', e?.code || e?.name || 'Error');
 		throw e
 	}
 }

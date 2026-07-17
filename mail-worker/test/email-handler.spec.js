@@ -142,6 +142,24 @@ describe('incoming email handler', () => {
 		expect(mocks.receive).not.toHaveBeenCalled();
 	});
 
+	it('rejects more than ten incoming attachments before hashing or persistence', async () => {
+		mocks.parse.mockResolvedValue(parsedEmail({
+			attachments: Array.from({ length: 11 }, (_, index) => ({
+				content: new Uint8Array([index]),
+				filename: `attachment-${index}.txt`,
+				mimeType: 'text/plain'
+			}))
+		}));
+		const incoming = message();
+
+		await handleEmail(incoming, {}, {});
+
+		expect(incoming.setReject).toHaveBeenCalledWith('Too many attachments');
+		expect(mocks.getBuffHash).not.toHaveBeenCalled();
+		expect(mocks.receive).not.toHaveBeenCalled();
+		expect(mocks.addAtt).not.toHaveBeenCalled();
+	});
+
 	it('does not complete an incoming email when attachment storage fails', async () => {
 		mocks.parse.mockResolvedValue(parsedEmail({
 			attachments: [{
@@ -158,8 +176,53 @@ describe('incoming email handler', () => {
 		expect(mocks.failReceive).toHaveBeenCalledWith(
 			{ env: {} },
 			1,
-			'object upload failed'
+			'ATTACHMENT_STORAGE_FAILED'
 		);
+		expect(mocks.completeReceive).not.toHaveBeenCalled();
+	});
+
+	it('persists the expected attachment count before attachment storage begins', async () => {
+		mocks.parse.mockResolvedValue(parsedEmail({
+			attachments: [
+				{
+					content: new Uint8Array([1]),
+					filename: 'first.pdf',
+					mimeType: 'application/pdf'
+				},
+				{
+					content: new Uint8Array([2]),
+					filename: 'second.pdf',
+					mimeType: 'application/pdf'
+				}
+			]
+		}));
+
+		await handleEmail(message(), {}, {});
+
+		expect(mocks.receive).toHaveBeenCalledWith(
+			{ env: {} },
+			expect.objectContaining({ attachmentCount: 2 }),
+			expect.any(Array),
+			undefined
+		);
+	});
+
+	it('keeps the email saving when the object exists but the ready-state update is uncertain', async () => {
+		mocks.parse.mockResolvedValue(parsedEmail({
+			attachments: [{
+				content: new Uint8Array([1, 2, 3]),
+				filename: 'report.pdf',
+				mimeType: 'application/pdf'
+			}]
+		}));
+		const stateError = new Error('Attachment state update failed');
+		stateError.attachmentRecoveryPending = true;
+		mocks.addAtt.mockRejectedValue(stateError);
+
+		await expect(handleEmail(message(), {}, {}))
+			.rejects.toThrow('Attachment state update failed');
+
+		expect(mocks.failReceive).not.toHaveBeenCalled();
 		expect(mocks.completeReceive).not.toHaveBeenCalled();
 	});
 });

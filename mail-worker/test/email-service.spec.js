@@ -112,6 +112,7 @@ vi.mock('../src/service/account-service', () => ({
 vi.mock('../src/service/att-service', () => ({
 	default: {
 		toImageUrlHtml: vi.fn(async () => mockState.imageResult),
+		reconcileReceived: vi.fn(),
 		saveArticleAtt: vi.fn(async () => {
 			mockState.operationLog.push({ type: 'saveArticleAtt' });
 		}),
@@ -204,35 +205,45 @@ describe('email service status synchronization', () => {
 		expect(emailSearchService.syncEmailIds).toHaveBeenCalledWith(c, [99]);
 	});
 
-	it('recovers stale SAVING messages regardless of is_del and restores them to normal', async () => {
-		const recorder = createDbRecorder([{ emailId: 1 }, { emailId: 2 }]);
-		const c = { env: { db: recorder.db } };
-		mockState.selectResults = [[{ emailId: 1 }, { emailId: 2 }]];
+		it('reconciles stale SAVING messages in a bounded batch instead of blindly publishing them', async () => {
+			const recorder = createDbRecorder([{
+				emailId: 1,
+				attachmentCount: 1,
+				recipientExists: 1
+			}]);
+			const c = { env: { db: recorder.db } };
+			attService.reconcileReceived.mockResolvedValue({
+				total: 1,
+				ready: 0,
+				pending: 0,
+				failed: 1
+			});
 
-		await emailService.completeReceiveAll(c);
+			await emailService.completeReceiveAll(c);
 
-		const selectStatement = recorder.statements.find(statement => statement.sql.includes('SELECT email_id'));
-		expect(selectStatement.sql).not.toContain('is_del = ?');
-		expect(selectStatement.sql).toContain("datetime('now', '-10 minutes')");
-
-		const updateStatements = recorder.statements.filter(statement => statement.sql.includes('UPDATE email'));
-		expect(updateStatements).toHaveLength(2);
-		expect(updateStatements.every(statement => statement.sql.includes('is_del = ?'))).toBe(true);
-		expect(updateStatements.every(statement => statement.sql.includes("datetime('now', '-10 minutes')"))).toBe(true);
-		expect(updateStatements[0].bindings).toEqual([emailConst.status.RECEIVE, isDel.NORMAL, emailConst.status.SAVING, emailConst.type.RECEIVE]);
-		expect(updateStatements[1].bindings).toEqual([emailConst.status.NOONE, isDel.NORMAL, emailConst.status.SAVING, emailConst.type.RECEIVE]);
-		expect(emailSearchService.syncEmailIds).toHaveBeenCalledWith(c, [1, 2]);
-	});
-
-	it('marks failed incoming attachment storage without making the email visible', async () => {
-		const c = { env: { db: createDbRecorder().db } };
-
-		await emailService.failReceive(c, 55, 'object upload failed');
-
-		expect(mockState.updates[0]).toEqual({
-			status: emailConst.status.FAILED,
-			message: 'object upload failed'
+			const selectStatement = recorder.statements.find(statement => statement.sql.includes('attachment_count'));
+			expect(selectStatement.sql).not.toContain('is_del = ?');
+			expect(selectStatement.sql).toContain("datetime('now', '-10 minutes')");
+			expect(selectStatement.sql).toContain('LIMIT 4');
+			expect(attService.reconcileReceived).toHaveBeenCalledWith(c, 1);
+			expect(mockState.updates[0]).toEqual({
+				status: emailConst.status.FAILED,
+				message: 'ATTACHMENT_RECOVERY_FAILED',
+				recoveryAfter: null
+			});
+			expect(emailSearchService.syncEmailIds).not.toHaveBeenCalled();
 		});
+
+		it('stores only bounded allowlisted incoming failure codes', async () => {
+			const c = { env: { db: createDbRecorder().db } };
+
+			await emailService.failReceive(c, 55, `provider secret ${'x'.repeat(500)}`);
+
+			expect(mockState.updates[0]).toEqual({
+				status: emailConst.status.FAILED,
+				message: 'RECEIVE_FAILED',
+				recoveryAfter: null
+			});
 		expect(emailSearchService.syncEmailIds).not.toHaveBeenCalled();
 	});
 

@@ -39,6 +39,7 @@ const dbInit = {
 		await this.v3_2DB(c);
 		await this.v3_3DB(c);
 		await this.v3_4DB(c);
+		await this.v3_5DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -233,6 +234,42 @@ const dbInit = {
 		await c.env.db.prepare(`
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_platform_user_unique
 			ON oauth (platform, oauth_user_id)
+		`).run();
+	},
+
+	async v3_5DB(c) {
+		const emailColumns = await c.env.db.prepare('PRAGMA table_info(email)').all();
+		const emailColumnNames = new Set((emailColumns.results || []).map(row => row.name));
+		if (!emailColumnNames.has('attachment_count')) {
+			await c.env.db.prepare(`
+				ALTER TABLE email ADD COLUMN attachment_count INTEGER
+			`).run();
+		}
+		if (!emailColumnNames.has('recovery_after')) {
+			await c.env.db.prepare(`
+				ALTER TABLE email ADD COLUMN recovery_after DATETIME
+			`).run();
+		}
+
+		const attachmentColumns = await c.env.db.prepare('PRAGMA table_info(attachments)').all();
+		const attachmentColumnNames = new Set((attachmentColumns.results || []).map(row => row.name));
+		if (!attachmentColumnNames.has('message')) {
+			await c.env.db.prepare(`
+				ALTER TABLE attachments ADD COLUMN message TEXT
+			`).run();
+		}
+
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_email_receive_recovery
+			ON email(type, status, create_time, email_id)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_email_receive_recovery_due
+			ON email(type, status, recovery_after, create_time, email_id)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_attachments_email_status_key
+			ON attachments(email_id, status, key)
 		`).run();
 	},
 

@@ -20,8 +20,17 @@ const EXPECTED_EMAIL_COLUMNS = [
 	'to_email',
 	'type',
 	'status',
+	'attachment_count',
+	'recovery_after',
 	'unread',
 	'is_del'
+];
+
+const EXPECTED_ATTACHMENT_COLUMNS = [
+	'att_id',
+	'email_id',
+	'status',
+	'message'
 ];
 
 const EXPECTED_INDEXES = [
@@ -44,6 +53,9 @@ const EXPECTED_INDEXES = [
 	'idx_oauth_auth_state_initiator_expires_at',
 	'idx_oauth_bind_challenge_expires_at',
 	'idx_oauth_platform_user_unique',
+	'idx_email_receive_recovery',
+	'idx_email_receive_recovery_due',
+	'idx_attachments_email_status_key',
 	'idx_email_type_create_time',
 	'idx_user_create_time'
 ];
@@ -64,6 +76,9 @@ const INDEX_SQL_LIST = [
 	`CREATE INDEX IF NOT EXISTS idx_email_account ON email(account_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_star_email ON star(email_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_oauth_user ON oauth(user_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_email_receive_recovery ON email(type, status, create_time, email_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_email_receive_recovery_due ON email(type, status, recovery_after, create_time, email_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_attachments_email_status_key ON attachments(email_id, status, key);`,
 	`CREATE INDEX IF NOT EXISTS idx_email_type_create_time ON email(type, create_time);`,
 	`CREATE INDEX IF NOT EXISTS idx_user_create_time ON user(create_time);`,
 	`DROP INDEX IF EXISTS idx_email_user_id_account_id;`
@@ -136,6 +151,8 @@ const maintenanceService = {
 		const details = {
 			emailColumns: [],
 			missingEmailColumns: EXPECTED_EMAIL_COLUMNS,
+			attachmentColumns: [],
+			missingAttachmentColumns: EXPECTED_ATTACHMENT_COLUMNS,
 			indexes: [],
 			missingIndexes: EXPECTED_INDEXES,
 			emailSearchRows: 0,
@@ -148,8 +165,9 @@ const maintenanceService = {
 
 		if (dbAvailable) {
 			const start = Date.now();
-			const [columnRows, indexRows, searchTable, emailCount, searchCount, queryPlan] = await Promise.all([
+			const [columnRows, attachmentColumnRows, indexRows, searchTable, emailCount, searchCount, queryPlan] = await Promise.all([
 				c.env.db.prepare(`PRAGMA table_info(email)`).all(),
+				c.env.db.prepare(`PRAGMA table_info(attachments)`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index'`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'email_search'`).first(),
 				c.env.db.prepare(`SELECT COUNT(*) AS total FROM email`).first().catch(error => {
@@ -182,6 +200,9 @@ const maintenanceService = {
 			details.durationMs = Date.now() - start;
 			details.emailColumns = (columnRows.results || []).map(row => row.name);
 			details.missingEmailColumns = EXPECTED_EMAIL_COLUMNS.filter(name => !details.emailColumns.includes(name));
+			details.attachmentColumns = (attachmentColumnRows.results || []).map(row => row.name);
+			details.missingAttachmentColumns = EXPECTED_ATTACHMENT_COLUMNS
+				.filter(name => !details.attachmentColumns.includes(name));
 			details.indexes = (indexRows.results || []).map(row => row.name);
 			details.missingIndexes = EXPECTED_INDEXES.filter(name => !details.indexes.includes(name));
 			details.emailTotal = emailCount.total;
@@ -192,10 +213,15 @@ const maintenanceService = {
 
 			checks.push({
 				key: 'schema',
-				ok: details.missingEmailColumns.length === 0,
+				ok: details.missingEmailColumns.length === 0
+					&& details.missingAttachmentColumns.length === 0,
 				message: details.missingEmailColumns.length === 0
-					? 'Email schema is complete'
-					: `Missing columns: ${details.missingEmailColumns.join(', ')}`
+					&& details.missingAttachmentColumns.length === 0
+					? 'Email and attachment schema is complete'
+					: `Missing columns: ${[
+						...details.missingEmailColumns.map(name => `email.${name}`),
+						...details.missingAttachmentColumns.map(name => `attachments.${name}`)
+					].join(', ')}`
 			});
 			checks.push({
 				key: 'indexes',
@@ -248,11 +274,13 @@ const maintenanceService = {
 			await dbInit.v3_2DB(c);
 			await dbInit.v3_3DB(c);
 			await dbInit.v3_4DB(c);
+			await dbInit.v3_5DB(c);
 			return this.health(c);
 		}
 
 		if (action === 'indexes') {
 			await dbInit.v3_4DB(c);
+			await dbInit.v3_5DB(c);
 			await dbInit.runOptionalSqlList(c, INDEX_SQL_LIST);
 			return this.health(c);
 		}

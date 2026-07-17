@@ -59,8 +59,11 @@ export const emailConst = {
 
 export const attConst = {
 	status: {
+		READY: 0,
 		NORMAL: 0,
-		UNUSED: 1
+		UNUSED: 1,
+		PENDING: 2,
+		FAILED: 3
 	},
 	type: {
 		ATT: 0,

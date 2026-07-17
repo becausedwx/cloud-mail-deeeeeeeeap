@@ -29,6 +29,20 @@ const CLOUDFLARE_EMAIL_MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
 const RESEND_MAX_MESSAGE_BYTES = 40 * 1000 * 1000;
 const PROVIDER_MESSAGE_OVERHEAD_BYTES = 2 * 1024;
 const PROVIDER_ATTACHMENT_OVERHEAD_BYTES = 1024;
+const RECEIVE_RECOVERY_EMAIL_LIMIT = 4;
+const RECEIVE_FAILURE_CODES = new Set([
+	'ATTACHMENT_STORAGE_FAILED',
+	'ATTACHMENT_OBJECT_WRITE_FAILED',
+	'ATTACHMENT_METADATA_MISSING',
+	'ATTACHMENT_COUNT_MISMATCH',
+	'ATTACHMENT_RECOVERY_FAILED',
+	'ATTACHMENT_STATE_INVALID',
+	'ATTACHMENT_RECOVERY_LIMIT_EXCEEDED'
+]);
+
+function normalizeReceiveFailureCode(value) {
+	return RECEIVE_FAILURE_CODES.has(value) ? value : 'RECEIVE_FAILED';
+}
 
 function base64PayloadLength(content) {
 	if (typeof content !== 'string') {
@@ -494,7 +508,11 @@ const emailService = {
 				await attService.saveSendAtt(c, attachments, userId, accountId, emailResult.emailId);
 			}
 
-			attList = await attService.selectByEmailIds(c, [emailResult.emailId]);
+			attList = await attService.selectByEmailIds(
+				c,
+				[emailResult.emailId],
+				{ allowParentSaving: true }
+			);
 		} catch (e) {
 			await this.markSendFailed(c, emailResult.emailId, e?.message || String(e));
 			throw e;
@@ -1338,8 +1356,42 @@ const emailService = {
 	async completeReceive(c, status, emailId) {
 		const emailRow = await orm(c).update(email).set({
 			isDel: isDel.NORMAL,
-			status: status
-		}).where(eq(email.emailId, emailId)).returning().get();
+			status: status,
+			message: null,
+			recoveryAfter: null
+		}).where(and(
+			eq(email.emailId, emailId),
+			eq(email.type, emailConst.type.RECEIVE),
+			eq(email.status, emailConst.status.SAVING),
+			sql`${email.attachmentCount} IS NOT NULL`,
+			sql`(
+				SELECT COUNT(*)
+				FROM attachments a
+				WHERE a.email_id = ${email.emailId}
+				  AND a.status = ${attConst.status.READY}
+			) = ${email.attachmentCount}`,
+			sql`NOT EXISTS (
+				SELECT 1
+				FROM attachments a
+				WHERE a.email_id = ${email.emailId}
+				  AND a.status != ${attConst.status.READY}
+			)`
+		)).returning().get();
+		if (!emailRow) {
+			const completedRow = await orm(c).select().from(email).where(and(
+				eq(email.emailId, emailId),
+				eq(email.type, emailConst.type.RECEIVE),
+				inArray(email.status, [emailConst.status.RECEIVE, emailConst.status.NOONE]),
+				eq(email.isDel, isDel.NORMAL)
+			)).get();
+			if (completedRow) {
+				await emailSearchService.syncEmailIds(c, [emailId]);
+				return completedRow;
+			}
+			const error = new Error('Incoming email attachments are not ready');
+			error.code = 'INCOMING_ATTACHMENTS_NOT_READY';
+			throw error;
+		}
 		await emailSearchService.syncEmailIds(c, [emailId]);
 		return emailRow;
 	},
@@ -1347,29 +1399,103 @@ const emailService = {
 	async failReceive(c, emailId, message) {
 		await orm(c).update(email).set({
 			status: emailConst.status.FAILED,
-			message
-		}).where(eq(email.emailId, emailId)).run();
+			message: normalizeReceiveFailureCode(message),
+			recoveryAfter: null
+		}).where(and(
+			eq(email.emailId, emailId),
+			eq(email.type, emailConst.type.RECEIVE),
+			eq(email.status, emailConst.status.SAVING)
+		)).run();
+	},
+
+	async deferReceiveRecovery(c, emailId) {
+		await c.env.db.prepare(`
+			UPDATE email
+			SET recovery_after = datetime('now', '+1 hour'),
+				message = ?
+			WHERE email_id = ? AND type = ? AND status = ?
+		`).bind(
+			'ATTACHMENT_RECOVERY_RETRY',
+			emailId,
+			emailConst.type.RECEIVE,
+			emailConst.status.SAVING
+		).run();
 	},
 
 	async completeReceiveAll(c) {
-		// 收信插入时是 is_del=DELETE + status=SAVING，崩溃后会停留在该状态；
-		// 这里不过滤 is_del 并把它一并恢复为 NORMAL，只处理超过 10 分钟的行，避免碰到正在收信的邮件
 		const { results: pendingRows = [] } = await c.env.db.prepare(`
-			SELECT email_id AS emailId
-			FROM email
-			WHERE status = ? AND type = ? AND create_time <= datetime('now', '-10 minutes')
+			SELECT
+				e.email_id AS emailId,
+				e.attachment_count AS attachmentCount,
+				EXISTS (
+					SELECT 1 FROM account a WHERE a.account_id = e.account_id
+				) AS recipientExists
+			FROM email e
+			WHERE e.status = ?
+			  AND e.type = ?
+			  AND e.create_time <= datetime('now', '-10 minutes')
+			  AND (e.recovery_after IS NULL OR e.recovery_after <= CURRENT_TIMESTAMP)
+			ORDER BY COALESCE(e.recovery_after, e.create_time), e.email_id
+			LIMIT ${RECEIVE_RECOVERY_EMAIL_LIMIT}
 		`).bind(emailConst.status.SAVING, emailConst.type.RECEIVE).all();
-		await c.env.db.prepare(`
-			UPDATE email as e
-			SET status = ?, is_del = ?
-			WHERE status = ? AND type = ? AND create_time <= datetime('now', '-10 minutes') AND EXISTS (SELECT 1 FROM account WHERE account_id = e.account_id)
-		`).bind(emailConst.status.RECEIVE, isDel.NORMAL, emailConst.status.SAVING, emailConst.type.RECEIVE).run();
-		await c.env.db.prepare(`
-			UPDATE email as e
-			SET status = ?, is_del = ?
-			WHERE status = ? AND type = ? AND create_time <= datetime('now', '-10 minutes') AND NOT EXISTS (SELECT 1 FROM account WHERE account_id = e.account_id)
-		`).bind(emailConst.status.NOONE, isDel.NORMAL, emailConst.status.SAVING, emailConst.type.RECEIVE).run();
-		await emailSearchService.syncEmailIds(c, pendingRows.map(row => row.emailId));
+
+		for (const pendingRow of pendingRows) {
+			let summary;
+			try {
+				summary = await attService.reconcileReceived(c, pendingRow.emailId);
+			} catch {
+				// Storage or D1 is temporarily unavailable. Keep SAVING for a later retry.
+				try {
+					await this.deferReceiveRecovery(c, pendingRow.emailId);
+				} catch {
+					// If D1 itself is unavailable, the next cron run can retry this row.
+				}
+				continue;
+			}
+
+			const expectedCount = Number(pendingRow.attachmentCount);
+			if (pendingRow.attachmentCount === null || !Number.isInteger(expectedCount) || expectedCount < 0) {
+				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_METADATA_MISSING');
+				continue;
+			}
+
+			if (summary.overflow) {
+				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_RECOVERY_LIMIT_EXCEEDED');
+				continue;
+			}
+
+			if (summary.total !== expectedCount) {
+				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_COUNT_MISMATCH');
+				continue;
+			}
+
+			if (summary.failed > 0) {
+				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_RECOVERY_FAILED');
+				continue;
+			}
+
+			if (summary.other > 0) {
+				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_STATE_INVALID');
+				continue;
+			}
+
+			if (summary.pending > 0 || summary.ready !== expectedCount) {
+				continue;
+			}
+
+			try {
+				await this.completeReceive(
+					c,
+					pendingRow.recipientExists ? emailConst.status.RECEIVE : emailConst.status.NOONE,
+					pendingRow.emailId
+				);
+			} catch (error) {
+				if (error?.code !== 'INCOMING_ATTACHMENTS_NOT_READY') {
+					throw error;
+				}
+				// Another recovery runner changed this email first. Continue the bounded batch.
+			}
+		}
 	},
 
 	async updateCode(c, emailId, code) {

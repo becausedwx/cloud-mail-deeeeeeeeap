@@ -22,6 +22,8 @@ export const email = sqliteTable('email', {
 	status: integer('status').default(0).notNull(),
 	resendEmailId: text('resend_email_id'),
 	message: text('message'),
+	attachmentCount: integer('attachment_count'),
+	recoveryAfter: text('recovery_after'),
 	unread: integer('unread').default(0).notNull(),
 	createTime: text('create_time').default(sql`CURRENT_TIMESTAMP`).notNull(),
 	isDel: integer('is_del').default(0).notNull()

@@ -1,10 +1,10 @@
 import orm from '../entity/orm';
 import { att } from '../entity/att';
-import { and, eq, isNull, inArray, desc } from 'drizzle-orm';
+import { and, eq, isNull, inArray, desc, sql } from 'drizzle-orm';
 import r2Service from './r2-service';
 import constant from '../const/constant';
 import fileUtils from '../utils/file-utils';
-import { attConst } from '../const/entity-const';
+import { attConst, emailConst } from '../const/entity-const';
 import { parseHTML } from 'linkedom';
 import { v4 as uuidv4 } from 'uuid';
 import domainUtils from '../utils/domain-uitls';
@@ -13,6 +13,8 @@ import BizError from '../error/biz-error';
 import { chunkArray } from '../utils/sql-utils';
 
 const NOT_FOUND_MESSAGE = 'Attachment not found';
+// Leaves headroom below the Workers Free 50 external-subrequest limit when S3 is used.
+const RECEIVE_RECOVERY_ATTACHMENT_LIMIT = 10;
 
 function normalizeAttId(attId) {
 	const id = Number(attId);
@@ -35,12 +37,74 @@ function attachmentMimeType(attachment) {
 		|| 'application/octet-stream';
 }
 
+function parentEmailReadyCondition() {
+	return sql`EXISTS (
+		SELECT 1
+		FROM email e
+		WHERE e.email_id = ${att.emailId}
+		  AND e.status NOT IN (${emailConst.status.SAVING}, ${emailConst.status.FAILED})
+	)`;
+}
+
+function attachmentStorageError(message, recoveryPending = false) {
+	const error = new Error(message);
+	error.code = recoveryPending
+		? 'ATTACHMENT_STATE_UPDATE_FAILED'
+		: 'ATTACHMENT_OBJECT_WRITE_FAILED';
+	error.attachmentRecoveryPending = recoveryPending;
+	return error;
+}
+
+async function updateAttachmentKeyStatus(c, attachments, key, status, message = null) {
+	const emailIds = [...new Set(attachments
+		.filter(item => item.key === key)
+		.map(item => item.emailId))];
+
+	for (const emailId of emailIds) {
+		const result = await c.env.db.prepare(`
+			UPDATE attachments
+			SET status = ?, message = ?
+			WHERE email_id = ? AND key = ? AND status = ?
+		`).bind(
+			status,
+			message,
+			emailId,
+			key,
+			attConst.status.PENDING
+		).run();
+		const changes = Number(result?.meta?.changes);
+		if (Number.isFinite(changes) && changes === 0) {
+			throw new Error('Attachment status transition did not update any rows');
+		}
+	}
+}
+
+async function failPendingAttachmentRows(c, attachments, message = 'BATCH_ABORTED') {
+	const emailIds = [...new Set(attachments
+		.map(item => item.emailId)
+		.filter(emailId => emailId !== undefined && emailId !== null))];
+
+	for (const emailId of emailIds) {
+		await c.env.db.prepare(`
+			UPDATE attachments
+			SET status = ?, message = ?
+			WHERE email_id = ? AND status = ?
+		`).bind(
+			attConst.status.FAILED,
+			message,
+			emailId,
+			attConst.status.PENDING
+		).run();
+	}
+}
+
 const attService = {
 
 	async addAtt(c, attachments) {
 		const writtenKeys = new Set();
 		const attachmentRows = attachments.map(attachment => ({
 			...attachment,
+			status: attConst.status.PENDING,
 			type: attachment.type === attConst.type.EMBED
 				? attConst.type.EMBED
 				: attConst.type.ATT
@@ -61,8 +125,39 @@ const attService = {
 				metadata.cacheControl = `max-age=259200`
 			}
 
-			await r2Service.putObj(c, attachment.key, attachment.content, metadata);
+			try {
+				await r2Service.putObj(c, attachment.key, attachment.content, metadata);
+			} catch (e) {
+				try {
+					await updateAttachmentKeyStatus(
+						c,
+						attachments,
+						attachment.key,
+						attConst.status.FAILED,
+						'OBJECT_WRITE_FAILED'
+					);
+				} catch {
+					// Leave PENDING rows for the recovery job when D1 is unavailable.
+				}
+				try {
+					await failPendingAttachmentRows(c, attachments);
+				} catch {
+					// D1 is unavailable; the hidden parent email keeps these rows inaccessible.
+				}
+				throw attachmentStorageError('Attachment object storage failed');
+			}
 			writtenKeys.add(attachment.key);
+
+			try {
+				await updateAttachmentKeyStatus(
+					c,
+					attachments,
+					attachment.key,
+					attConst.status.READY
+				);
+			} catch {
+				throw attachmentStorageError('Attachment state update failed', true);
+			}
 
 		}
 	},
@@ -75,6 +170,8 @@ const attService = {
 				eq(att.emailId, emailId),
 				eq(att.userId, userId),
 				eq(att.type, attConst.type.ATT),
+				eq(att.status, attConst.status.READY),
+				parentEmailReadyCondition(),
 				isNull(att.contentId)
 			)
 		).all();
@@ -91,16 +188,142 @@ const attService = {
 
 		try {
 			const row = await c.env.db.prepare(`
-				SELECT att_id
-				FROM attachments
-				WHERE key = ?
-				  AND type = ?
+				SELECT a.att_id
+				FROM attachments a
+				JOIN email e ON e.email_id = a.email_id
+				WHERE a.key = ?
+				  AND a.type = ?
+				  AND a.status = ?
+				  AND e.status NOT IN (?, ?)
 				LIMIT 1
-			`).bind(key, attConst.type.EMBED).first();
+			`).bind(
+				key,
+				attConst.type.EMBED,
+				attConst.status.READY,
+				emailConst.status.SAVING,
+				emailConst.status.FAILED
+			).first();
 			return !!row;
 		} catch (e) {
 			return false;
 		}
+	},
+
+	async reconcileReceived(c, emailId) {
+		const { results: rows = [] } = await c.env.db.prepare(`
+			SELECT att_id AS attId, key, status, message
+			FROM attachments
+			WHERE email_id = ?
+			ORDER BY att_id
+			LIMIT ${RECEIVE_RECOVERY_ATTACHMENT_LIMIT + 1}
+		`).bind(emailId).all();
+		if (rows.length > RECEIVE_RECOVERY_ATTACHMENT_LIMIT) {
+			return {
+				total: rows.length,
+				ready: 0,
+				pending: 0,
+				failed: 0,
+				other: 0,
+				overflow: true
+			};
+		}
+
+		const rowsByKey = new Map();
+		for (const row of rows) {
+			const keyRows = rowsByKey.get(row.key) || [];
+			keyRows.push(row);
+			rowsByKey.set(row.key, keyRows);
+		}
+		const storageType = rowsByKey.size > 0
+			? await r2Service.storageType(c)
+			: null;
+
+		for (const [key, keyRows] of rowsByKey) {
+			const statuses = keyRows.map(row => Number(row.status));
+			if (!statuses.some(status => (
+				status === attConst.status.READY || status === attConst.status.PENDING
+			))) {
+				continue;
+			}
+
+			const exists = await r2Service.exists(c, key, {
+				storageType,
+				maxAttempts: 1
+			});
+			if (!exists) {
+				const kvMissingAlreadyObserved = keyRows.every(row => (
+					row.message === 'OBJECT_MISSING_RECHECK'
+				));
+				if (storageType === 'KV' && !kvMissingAlreadyObserved) {
+					await c.env.db.prepare(`
+						UPDATE attachments
+						SET status = ?, message = ?
+						WHERE email_id = ? AND key = ? AND status IN (?, ?)
+					`).bind(
+						attConst.status.PENDING,
+						'OBJECT_MISSING_RECHECK',
+						emailId,
+						key,
+						attConst.status.READY,
+						attConst.status.PENDING
+					).run();
+					continue;
+				}
+				await c.env.db.prepare(`
+					UPDATE attachments
+					SET status = ?, message = ?
+					WHERE email_id = ? AND key = ? AND status IN (?, ?)
+				`).bind(
+					attConst.status.FAILED,
+					'OBJECT_MISSING',
+					emailId,
+					key,
+					attConst.status.READY,
+					attConst.status.PENDING
+				).run();
+				continue;
+			}
+
+			if (statuses.includes(attConst.status.PENDING)) {
+				await c.env.db.prepare(`
+					UPDATE attachments
+					SET status = ?, message = NULL
+					WHERE email_id = ? AND key = ? AND status = ?
+				`).bind(
+					attConst.status.READY,
+					emailId,
+					key,
+					attConst.status.PENDING
+				).run();
+			}
+		}
+
+		const summary = await c.env.db.prepare(`
+			SELECT
+				COUNT(*) AS total,
+				SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS ready,
+				SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS pending,
+				SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS failed
+			FROM attachments
+			WHERE email_id = ?
+		`).bind(
+			attConst.status.READY,
+			attConst.status.PENDING,
+			attConst.status.FAILED,
+			emailId
+		).first();
+
+		const total = Number(summary?.total || 0);
+		const ready = Number(summary?.ready || 0);
+		const pending = Number(summary?.pending || 0);
+		const failed = Number(summary?.failed || 0);
+		return {
+			total,
+			ready,
+			pending,
+			failed,
+			other: Math.max(0, total - ready - pending - failed)
+		};
 	},
 
 	async download(c, params, userId) {
@@ -120,29 +343,38 @@ const attService = {
 		}
 
 		const filters = [
-			'att_id = ?',
-			'type = ?',
-			'(content_id IS NULL OR content_id = \'\')'
+			'a.att_id = ?',
+			'a.type = ?',
+			'a.status = ?',
+			'e.status NOT IN (?, ?)',
+			'(a.content_id IS NULL OR a.content_id = \'\')'
 		];
-		const bindings = [id, attConst.type.ATT];
+		const bindings = [
+			id,
+			attConst.type.ATT,
+			attConst.status.READY,
+			emailConst.status.SAVING,
+			emailConst.status.FAILED
+		];
 
 		if (userId !== undefined && userId !== null) {
-			filters.push('user_id = ?');
+			filters.push('a.user_id = ?');
 			bindings.push(userId);
 		}
 
 		const attRow = await c.env.db.prepare(`
-			SELECT att_id as attId,
-			       user_id as userId,
-			       email_id as emailId,
-			       account_id as accountId,
-			       key,
-			       filename,
-			       mime_type as mimeType,
-			       size,
-			       type,
-			       content_id as contentId
-			FROM attachments
+			SELECT a.att_id as attId,
+			       a.user_id as userId,
+			       a.email_id as emailId,
+			       a.account_id as accountId,
+			       a.key,
+			       a.filename,
+			       a.mime_type as mimeType,
+			       a.size,
+			       a.type,
+			       a.content_id as contentId
+			FROM attachments a
+			JOIN email e ON e.email_id = a.email_id
 			WHERE ${filters.join(' AND ')}
 			LIMIT 1
 		`).bind(...bindings).first();
@@ -290,6 +522,7 @@ const attService = {
 			attData.size = att.buff.length;
 			attData.filename = att.filename;
 			attData.mimeType = att.mimeType;
+			attData.status = attConst.status.PENDING;
 			attData.type = attConst.type.ATT;
 			attDataList.push(attData);
 		}
@@ -298,9 +531,36 @@ const attService = {
 
 		try {
 			for (const att of objectByKey.values()) {
-				await r2Service.putObj(c, att.key, att.buff, {
-					contentType: att.mimeType
-				});
+				try {
+					await r2Service.putObj(c, att.key, att.buff, {
+						contentType: att.mimeType
+					});
+				} catch (error) {
+					try {
+						await updateAttachmentKeyStatus(
+							c,
+							attDataList,
+							att.key,
+							attConst.status.FAILED,
+							'OBJECT_WRITE_FAILED'
+						);
+					} catch {
+						// The parent email remains hidden/failed; maintenance can inspect PENDING rows.
+					}
+					try {
+						await failPendingAttachmentRows(c, attDataList);
+					} catch {
+						// D1 is unavailable; the parent send path will remain failed and inaccessible.
+					}
+					throw error;
+				}
+
+				await updateAttachmentKeyStatus(
+					c,
+					attDataList,
+					att.key,
+					attConst.status.READY
+				);
 			}
 		} finally {
 			for (const att of attList) {
@@ -311,28 +571,66 @@ const attService = {
 	},
 
 	async saveArticleAtt(c, attDataList, userId, accountId, emailId) {
-		const writtenKeys = new Set();
+		const objectByKey = new Map();
 
-		for (let attData of attDataList) {
+		for (const attData of attDataList) {
 			attData.userId = userId;
 			attData.emailId = emailId;
 			attData.accountId = accountId;
 			attData.type = attConst.type.EMBED;
-			if (!attData.buff) {
-				continue;
+			attData.status = attConst.status.PENDING;
+			const current = objectByKey.get(attData.key);
+			if (!current || (!current.buff && attData.buff)) {
+				objectByKey.set(attData.key, attData);
 			}
-			if (!writtenKeys.has(attData.key)) {
-				await r2Service.putObj(c, attData.key, attData.buff, {
-					contentType: attachmentMimeType(attData),
-					cacheControl: `max-age=259200`,
-					contentDisposition: 'inline'
-				});
-				writtenKeys.add(attData.key);
-			}
-			delete attData.buff;
 		}
 
 		await orm(c).insert(att).values(attDataList).run();
+
+		try {
+			for (const attData of objectByKey.values()) {
+				try {
+					if (attData.buff) {
+						await r2Service.putObj(c, attData.key, attData.buff, {
+							contentType: attachmentMimeType(attData),
+							cacheControl: `max-age=259200`,
+							contentDisposition: 'inline'
+						});
+					} else if (!await r2Service.exists(c, attData.key)) {
+						throw new Error('Attachment object not found');
+					}
+				} catch (error) {
+					try {
+						await updateAttachmentKeyStatus(
+							c,
+							attDataList,
+							attData.key,
+							attConst.status.FAILED,
+							'OBJECT_WRITE_FAILED'
+						);
+					} catch {
+						// The parent email is still SAVING/FAILED and these rows remain hidden.
+					}
+					try {
+						await failPendingAttachmentRows(c, attDataList);
+					} catch {
+						// D1 is unavailable; the parent send path keeps these rows inaccessible.
+					}
+					throw error;
+				}
+
+				await updateAttachmentKeyStatus(
+					c,
+					attDataList,
+					attData.key,
+					attConst.status.READY
+				);
+			}
+		} finally {
+			for (const attData of attDataList) {
+				delete attData.buff;
+			}
+		}
 
 	},
 
@@ -344,14 +642,19 @@ const attService = {
 		await this.removeAttByField(c, 'email_id', emailIds);
 	},
 
-	async selectByEmailIds(c, emailIds) {
+	async selectByEmailIds(c, emailIds, options = {}) {
 		const rows = [];
 		for (const chunk of chunkArray(emailIds)) {
+			const conditions = [
+				inArray(att.emailId, chunk),
+				eq(att.type, attConst.type.ATT),
+				eq(att.status, attConst.status.READY)
+			];
+			if (options.allowParentSaving !== true) {
+				conditions.push(parentEmailReadyCondition());
+			}
 			rows.push(...await orm(c).select().from(att).where(
-				and(
-					inArray(att.emailId, chunk),
-					eq(att.type, attConst.type.ATT)
-				))
+				and(...conditions))
 				.all());
 		}
 		return rows;
@@ -418,7 +721,9 @@ const attService = {
 		for (const chunk of chunkArray(keys)) {
 			rows.push(...await orm(c).select().from(att).where(and(
 				inArray(att.key, chunk),
-				eq(att.userId, ownerId)
+				eq(att.userId, ownerId),
+				eq(att.status, attConst.status.READY),
+				parentEmailReadyCondition()
 			)).orderBy(desc(att.attId)).groupBy(att.key).all());
 		}
 		return rows;

@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectsCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import settingService from './setting-service';
 import domainUtils from '../utils/domain-uitls';
 import { settingConst } from '../const/entity-const';
@@ -112,10 +112,27 @@ const s3Service = {
 		}
 	},
 
+	async exists(c, key, options = {}) {
+		const client = await this.client(c, options);
+		const { bucket } = await settingService.query(c);
+		try {
+			await client.send(new HeadObjectCommand({
+				Bucket: bucket,
+				Key: key
+			}));
+			return true;
+		} catch (e) {
+			if (isMissingObjectError(e)) {
+				return false;
+			}
+			throw e;
+		}
+	},
 
-	async client(c) {
+
+	async client(c, options = {}) {
 		const { region, endpoint, s3AccessKey, s3SecretKey, forcePathStyle } = await settingService.query(c);
-		return new S3Client({
+		const clientOptions = {
 			region: region || 'auto',
 			endpoint: domainUtils.toOssDomain(endpoint),
 			forcePathStyle: forcePathStyle === settingConst.forcePathStyle.OPEN,
@@ -123,7 +140,11 @@ const s3Service = {
 				accessKeyId: s3AccessKey,
 				secretAccessKey: s3SecretKey,
 			}
-		});
+		};
+		if (Number.isInteger(options.maxAttempts) && options.maxAttempts > 0) {
+			clientOptions.maxAttempts = options.maxAttempts;
+		}
+		return new S3Client(clientOptions);
 	}
 }
 

@@ -91,6 +91,26 @@ const r2Service = {
 		}
 	},
 
+	async exists(c, key, options = {}) {
+		const storageType = options.storageType || await this.storageType(c);
+
+		if (storageType === 'KV') {
+			return await kvObjService.exists(c, key);
+		}
+
+		if (storageType === 'R2') {
+			return !!await c.env.r2.head(key);
+		}
+
+		if (storageType === 'S3') {
+			return await s3Service.exists(c, key, {
+				maxAttempts: options.maxAttempts
+			});
+		}
+
+		return false;
+	},
+
 	toResponse(obj, extraHeaders = {}) {
 		if (!obj) {
 			return null;

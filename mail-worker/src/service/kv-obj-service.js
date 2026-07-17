@@ -33,6 +33,17 @@ const kvObjService = {
 		return new Response(obj.value, { headers });
 	},
 
+	async exists(c, key) {
+		const obj = await c.env.kv.getWithMetadata(key, { type: 'stream' });
+		if (!obj.value) {
+			return false;
+		}
+		if (typeof obj.value.cancel === 'function') {
+			await obj.value.cancel().catch(() => {});
+		}
+		return true;
+	},
+
 	async toObjResp(c, key) {
 
 		return await this.getObj(c, key) || new Response('Not found', { status: 404 });

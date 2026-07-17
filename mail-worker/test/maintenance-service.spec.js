@@ -4,6 +4,7 @@ vi.mock('../src/init/init', () => ({
 	dbInit: {
 		v3_0DB: vi.fn(),
 		v3_4DB: vi.fn(),
+		v3_5DB: vi.fn(),
 		runOptionalSqlList: vi.fn()
 	}
 }));
@@ -113,6 +114,43 @@ describe('maintenance service', () => {
 		expect(result.details.emailTotal).toBe(7);
 		expect(result.details.emailSearchRows).toBe(0);
 		expect(result.checks.find(item => item.key === 'emailSearch').ok).toBe(false);
+	});
+
+	it('reports incoming recovery attachment columns as part of schema health', async () => {
+		const emailColumns = [
+			'email_id', 'send_email', 'name', 'account_id', 'user_id', 'subject', 'code',
+			'text', 'content', 'to_email', 'type', 'status', 'attachment_count', 'recovery_after', 'unread', 'is_del'
+		];
+		const c = {
+			env: {
+				db: {
+					prepare(sql) {
+						return {
+							bind() {
+								return this;
+							},
+							async all() {
+								if (sql.includes('PRAGMA table_info(email)')) {
+									return { results: emailColumns.map(name => ({ name })) };
+								}
+								if (sql.includes('PRAGMA table_info(attachments)')) {
+									return { results: [{ name: 'att_id' }, { name: 'status' }] };
+								}
+								return { results: [] };
+							},
+							async first() {
+								return { total: 0 };
+							}
+						};
+					}
+				}
+			}
+		};
+
+		const result = await maintenanceService.health(c);
+
+		expect(result.checks.find(item => item.key === 'schema').ok).toBe(false);
+		expect(result.details.missingAttachmentColumns).toContain('message');
 	});
 
 	it('rejects repair requests when D1 is not configured', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { createExecutionContext, waitOnExecutionContext, env as testEnv } from 'cloudflare:test';
-import { attConst } from '../src/const/entity-const';
+import { attConst, emailConst } from '../src/const/entity-const';
 
 vi.mock('../src/service/r2-service', async () => {
 	const actual = await vi.importActual('../src/service/r2-service');
@@ -21,7 +21,12 @@ const { default: kvObjService } = await import('../src/service/kv-obj-service');
 const { default: attService } = await import('../src/service/att-service');
 const { default: worker } = await import('../src/index');
 
-function createDbStub({ attachmentRows = [], downloadRow = null, publicLookupError = null } = {}) {
+function createDbStub({
+	attachmentRows = [],
+	downloadRow = null,
+	publicLookupError = null,
+	parentStatus = emailConst.status.RECEIVE
+} = {}) {
 	const calls = [];
 
 	return {
@@ -35,23 +40,39 @@ function createDbStub({ attachmentRows = [], downloadRow = null, publicLookupErr
 						call.bindings = args;
 						return this;
 					},
-					async first() {
-						if (sql.includes('WHERE key = ?')) {
-							if (publicLookupError) throw publicLookupError;
-							const [key, embedType] = call.bindings;
-							const row = attachmentRows.find(item => item.key === key && (
-								item.type === embedType
-							));
-							return row ? { att_id: row.attId || 1 } : null;
-						}
+						async first() {
+							if (sql.includes('WHERE key = ?') || sql.includes('WHERE a.key = ?')) {
+								if (publicLookupError) throw publicLookupError;
+								if (sql.includes('JOIN email') && [
+									emailConst.status.SAVING,
+									emailConst.status.FAILED
+								].includes(parentStatus)) return null;
+								const [key, embedType, readyStatus] = call.bindings;
+								const row = attachmentRows.find(item => item.key === key && (
+									item.type === embedType
+								) && (
+									!sql.includes('status = ?') || (item.status ?? 0) === readyStatus
+								));
+								return row ? { att_id: row.attId || 1 } : null;
+							}
 
-						if (sql.includes('WHERE att_id = ?')) {
-							const [attId, type, userId] = call.bindings;
-							if (!downloadRow) return null;
-							if (downloadRow.attId !== attId) return null;
-							if (downloadRow.type !== type) return null;
-							if (userId !== undefined && downloadRow.userId !== userId) return null;
-							return downloadRow;
+							if (sql.includes('WHERE att_id = ?') || sql.includes('a.att_id = ?')) {
+								const hasStatusFilter = sql.includes('status = ?');
+								const [attId, type] = call.bindings;
+								const readyStatus = hasStatusFilter ? call.bindings[2] : undefined;
+								const userId = call.bindings[hasStatusFilter
+									? (sql.includes('JOIN email') ? 5 : 3)
+									: 2];
+								if (!downloadRow) return null;
+								if (sql.includes('JOIN email') && [
+									emailConst.status.SAVING,
+									emailConst.status.FAILED
+								].includes(parentStatus)) return null;
+								if (downloadRow.attId !== attId) return null;
+								if (downloadRow.type !== type) return null;
+								if (hasStatusFilter && (downloadRow.status ?? 0) !== readyStatus) return null;
+								if (userId !== undefined && downloadRow.userId !== userId) return null;
+								return downloadRow;
 						}
 
 						return null;
@@ -73,10 +94,11 @@ function createInsertDbStub(operationLog = []) {
 						this.bindings = args;
 						return this;
 					},
-					async run() {
-						operationLog.push({ type: 'insert', sql, bindings: this.bindings });
-						return { success: true, meta: {}, results: [] };
-					}
+						async run() {
+							const type = /^\s*update\b/i.test(sql) ? 'update' : 'insert';
+							operationLog.push({ type, sql, bindings: this.bindings });
+							return { success: true, meta: {}, results: [] };
+						}
 				};
 			}
 		}
@@ -174,10 +196,13 @@ describe('attachment access control', () => {
 		await waitOnExecutionContext(ctx);
 
 		expect(response.status).toBe(404);
-		expect(recorder.calls[0].bindings).toEqual([
-			'attachments/private.txt',
-			attConst.type.EMBED
-		]);
+			expect(recorder.calls[0].bindings).toEqual([
+				'attachments/private.txt',
+				attConst.type.EMBED,
+				attConst.status.READY,
+				emailConst.status.SAVING,
+				emailConst.status.FAILED
+			]);
 	});
 
 	it('blocks registered normal attachment direct links from /api/oss', async () => {
@@ -195,10 +220,13 @@ describe('attachment access control', () => {
 		await waitOnExecutionContext(ctx);
 
 		expect(response.status).toBe(404);
-		expect(recorder.calls[0].bindings).toEqual([
-			'attachments/private.txt',
-			attConst.type.EMBED
-		]);
+			expect(recorder.calls[0].bindings).toEqual([
+				'attachments/private.txt',
+				attConst.type.EMBED,
+				attConst.status.READY,
+				emailConst.status.SAVING,
+				emailConst.status.FAILED
+			]);
 	});
 
 	it('serves D1-authorized inline attachments from both anonymous routes', async () => {
@@ -229,6 +257,49 @@ describe('attachment access control', () => {
 		expect(apiResponse.status).toBe(200);
 		expect(await apiResponse.text()).toBe('inline');
 		expect(r2Service.getObj).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not serve a pending inline attachment even when the object exists', async () => {
+		const recorder = createDbStub({
+			attachmentRows: [{
+				key: 'attachments/pending-inline.png',
+				type: attConst.type.EMBED,
+				status: 2,
+				contentId: 'cid-pending'
+			}]
+		});
+		r2Service.getObj.mockResolvedValue(new Response('must-not-leak'));
+
+		const response = await worker.fetch(
+			new Request('http://example.com/attachments/pending-inline.png'),
+			{ ...testEnv, db: recorder.db },
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(404);
+		expect(r2Service.getObj).not.toHaveBeenCalled();
+	});
+
+	it('does not expose a ready inline row while its parent email is still saving', async () => {
+		const recorder = createDbStub({
+			parentStatus: emailConst.status.SAVING,
+			attachmentRows: [{
+				key: 'attachments/partial-inline.png',
+				type: attConst.type.EMBED,
+				status: attConst.status.READY,
+				contentId: 'cid-partial'
+			}]
+		});
+		r2Service.getObj.mockResolvedValue(new Response('must-not-leak'));
+
+		const response = await worker.fetch(
+			new Request('http://example.com/attachments/partial-inline.png'),
+			{ ...testEnv, db: recorder.db },
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(404);
+		expect(r2Service.getObj).not.toHaveBeenCalled();
 	});
 
 	it('does not treat a content ID alone as public-inline authorization', async () => {
@@ -405,6 +476,51 @@ describe('attachment access control', () => {
 		expect(r2Service.getObj).toHaveBeenCalledWith({ env: { db: recorder.db } }, 'attachments/private.txt');
 	});
 
+	it('rejects an authenticated download while the attachment is pending', async () => {
+		const recorder = createDbStub({
+			downloadRow: {
+				attId: 11,
+				userId: 7,
+				emailId: 20,
+				accountId: 30,
+				key: 'attachments/pending.txt',
+				filename: 'pending.txt',
+				mimeType: 'text/plain',
+				status: attConst.status.PENDING,
+				type: attConst.type.ATT,
+				contentId: null
+			}
+		});
+		r2Service.getObj.mockResolvedValue(new Response('must-not-leak'));
+
+		await expect(attService.download({ env: { db: recorder.db } }, { attId: '11' }, 7))
+			.rejects.toMatchObject({ code: 404 });
+		expect(r2Service.getObj).not.toHaveBeenCalled();
+	});
+
+	it('rejects a ready attachment download while its parent email is failed', async () => {
+		const recorder = createDbStub({
+			parentStatus: emailConst.status.FAILED,
+			downloadRow: {
+				attId: 12,
+				userId: 7,
+				emailId: 20,
+				accountId: 30,
+				key: 'attachments/partial.txt',
+				filename: 'partial.txt',
+				mimeType: 'text/plain',
+				status: attConst.status.READY,
+				type: attConst.type.ATT,
+				contentId: null
+			}
+		});
+		r2Service.getObj.mockResolvedValue(new Response('must-not-leak'));
+
+		await expect(attService.download({ env: { db: recorder.db } }, { attId: '12' }, 7))
+			.rejects.toMatchObject({ code: 404 });
+		expect(r2Service.getObj).not.toHaveBeenCalled();
+	});
+
 	it('does not let another user promote a private attachment key to public inline content', async () => {
 		const recorder = createAttachmentOwnerLookupDbStub([{
 			att_id: 10,
@@ -465,6 +581,56 @@ describe('attachment access control', () => {
 		expect(await response.text()).toBe('streamed');
 	});
 
+	it('checks KV object existence by cancelling the stream without buffering it', async () => {
+		const cancel = vi.fn(async () => {});
+		const exists = await kvObjService.exists({
+			env: {
+				kv: {
+					async getWithMetadata(key, options) {
+						expect(key).toBe('attachments/exists.pdf');
+						expect(options).toEqual({ type: 'stream' });
+						return { value: { cancel }, metadata: null };
+					}
+				}
+			}
+		}, 'attachments/exists.pdf');
+
+		expect(exists).toBe(true);
+		expect(cancel).toHaveBeenCalledOnce();
+	});
+
+	it('uses R2 head metadata for existence checks instead of reading the object body', async () => {
+		const head = vi.fn(async () => ({ key: 'attachments/exists.pdf', size: 10 }));
+		const settingSpy = vi.spyOn(settingService, 'query').mockResolvedValue({});
+
+		try {
+			const exists = await actualR2Service.exists({ env: { r2: { head } } }, 'attachments/exists.pdf');
+
+			expect(exists).toBe(true);
+			expect(head).toHaveBeenCalledWith('attachments/exists.pdf');
+		} finally {
+			settingSpy.mockRestore();
+		}
+	});
+
+	it('configures recovery S3 clients with a single request attempt', async () => {
+		const settingSpy = vi.spyOn(settingService, 'query').mockResolvedValue({
+			region: 'auto',
+			endpoint: 'https://s3.example.com',
+			s3AccessKey: 'test-access-key',
+			s3SecretKey: 'test-secret-key',
+			forcePathStyle: 0
+		});
+
+		try {
+			const client = await s3Service.client({ env: {} }, { maxAttempts: 1 });
+			expect(await client.config.maxAttempts()).toBe(1);
+			client.destroy();
+		} finally {
+			settingSpy.mockRestore();
+		}
+	});
+
 	it('uses the frontend contentType when saving sent attachments', async () => {
 		const recorder = createInsertDbStub();
 		r2Service.putObj.mockImplementation(async (...args) => {
@@ -483,8 +649,26 @@ describe('attachment access control', () => {
 			expect.any(Uint8Array),
 			{ contentType: 'application/pdf' }
 		);
-		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'put']);
+		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'put', 'update']);
 		expect(recorder.operationLog[0].bindings).toContain('application/pdf');
+	});
+
+	it('keeps sent attachment rows pending until their objects are stored', async () => {
+		const recorder = createInsertDbStub();
+		r2Service.putObj.mockImplementation(async (...args) => {
+			recorder.operationLog.push({ type: 'put', args });
+		});
+
+		await attService.saveSendAtt({ env: { db: recorder.db } }, [{
+			content: 'cGRm',
+			filename: 'stateful.pdf',
+			contentType: 'application/pdf'
+		}], 71, 301, 201);
+
+		expect(recorder.operationLog.map(operation => operation.type))
+			.toEqual(['insert', 'put', 'update']);
+		expect(recorder.operationLog[0].bindings).toContain(attConst.status.PENDING);
+		expect(recorder.operationLog[2].bindings).toContain(attConst.status.READY);
 	});
 
 	it('protects sent attachment keys even when object upload fails', async () => {
@@ -497,8 +681,32 @@ describe('attachment access control', () => {
 			contentType: 'application/pdf'
 		}], 7, 30, 20)).rejects.toThrow('object upload failed');
 
-		expect(recorder.operationLog).toHaveLength(1);
-		expect(recorder.operationLog[0].type).toBe('insert');
+		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'update', 'update']);
+		expect(recorder.operationLog[1].bindings).toContain(attConst.status.FAILED);
+		expect(recorder.operationLog[2].bindings).toContain('BATCH_ABORTED');
+	});
+
+	it('marks unattempted sent attachments failed when an upload batch aborts', async () => {
+		const recorder = createInsertDbStub();
+		r2Service.putObj
+			.mockImplementationOnce(async (...args) => {
+				recorder.operationLog.push({ type: 'put', args });
+			})
+			.mockRejectedValueOnce(new Error('second object upload failed'));
+
+		await expect(attService.saveSendAtt({ env: { db: recorder.db } }, [
+			{ content: 'YQ==', filename: 'first.txt', contentType: 'text/plain' },
+			{ content: 'Yg==', filename: 'second.txt', contentType: 'text/plain' },
+			{ content: 'Yw==', filename: 'unattempted.txt', contentType: 'text/plain' }
+		], 7, 30, 20)).rejects.toThrow('second object upload failed');
+
+		expect(r2Service.putObj).toHaveBeenCalledTimes(2);
+		expect(recorder.operationLog.some(operation => (
+			operation.type === 'update'
+			&& operation.bindings.includes(attConst.status.FAILED)
+			&& operation.bindings.includes('BATCH_ABORTED')
+			&& operation.bindings.includes(attConst.status.PENDING)
+		))).toBe(true);
 	});
 
 	it('uploads duplicate sent attachment objects once while keeping both rows', async () => {
@@ -519,7 +727,7 @@ describe('attachment access control', () => {
 		], 7, 30, 20);
 
 		expect(r2Service.putObj).toHaveBeenCalledTimes(1);
-		expect(recorder.operationLog).toHaveLength(1);
+		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'update']);
 		expect(recorder.operationLog[0].bindings.filter(value => value === 'application/pdf')).toHaveLength(2);
 		expect(recorder.operationLog[0].bindings).toEqual(expect.arrayContaining(['first.pdf', 'second.pdf']));
 	});
@@ -554,8 +762,99 @@ describe('attachment access control', () => {
 			contentDisposition: 'inline',
 			cacheControl: 'max-age=259200'
 		});
-		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'put', 'put']);
+		expect(recorder.operationLog.map(operation => operation.type))
+			.toEqual(['insert', 'put', 'update', 'put', 'update']);
 		expect(recorder.operationLog[0].bindings).toContain(attConst.type.EMBED);
+	});
+
+	it('persists received attachments as pending before upload and marks them ready afterwards', async () => {
+		const recorder = createInsertDbStub();
+		r2Service.putObj.mockImplementation(async (...args) => {
+			recorder.operationLog.push({ type: 'put', args });
+		});
+
+		await attService.addAtt({ env: { db: recorder.db } }, [{
+			userId: 71,
+			emailId: 201,
+			accountId: 301,
+			key: 'attachments/stateful.pdf',
+			content: new Uint8Array([1]),
+			filename: 'stateful.pdf',
+			mimeType: 'application/pdf'
+		}]);
+
+		expect(recorder.operationLog.map(operation => operation.type))
+			.toEqual(['insert', 'put', 'update']);
+		expect(recorder.operationLog[0].bindings).toContain(2);
+		expect(recorder.operationLog[2].bindings).toContain(0);
+	});
+
+	it('marks received attachment rows failed with a bounded safe reason when object storage fails', async () => {
+		const recorder = createInsertDbStub();
+		r2Service.putObj.mockRejectedValue(new Error(`provider secret ${'x'.repeat(500)}`));
+
+		await expect(attService.addAtt({ env: { db: recorder.db } }, [{
+			userId: 71,
+			emailId: 202,
+			accountId: 301,
+			key: 'attachments/failed.pdf',
+			content: new Uint8Array([1]),
+			filename: 'failed.pdf',
+			mimeType: 'application/pdf'
+		}])).rejects.toThrow('Attachment object storage failed');
+
+		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'update', 'update']);
+		expect(recorder.operationLog[1].bindings).toContain(3);
+		expect(recorder.operationLog[1].bindings).toContain('OBJECT_WRITE_FAILED');
+		expect(recorder.operationLog[2].bindings).toContain('BATCH_ABORTED');
+		expect(recorder.operationLog[1].bindings.join(' ')).not.toContain('provider secret');
+	});
+
+	it('marks unattempted received attachments failed when an upload batch aborts', async () => {
+		const recorder = createInsertDbStub();
+		r2Service.putObj
+			.mockImplementationOnce(async (...args) => {
+				recorder.operationLog.push({ type: 'put', args });
+			})
+			.mockRejectedValueOnce(new Error('second object upload failed'));
+
+		await expect(attService.addAtt({ env: { db: recorder.db } }, [
+			{
+				userId: 71,
+				emailId: 203,
+				accountId: 301,
+				key: 'attachments/first.pdf',
+				content: new Uint8Array([1]),
+				filename: 'first.pdf',
+				mimeType: 'application/pdf'
+			},
+			{
+				userId: 71,
+				emailId: 203,
+				accountId: 301,
+				key: 'attachments/second.pdf',
+				content: new Uint8Array([2]),
+				filename: 'second.pdf',
+				mimeType: 'application/pdf'
+			},
+			{
+				userId: 71,
+				emailId: 203,
+				accountId: 301,
+				key: 'attachments/unattempted.pdf',
+				content: new Uint8Array([3]),
+				filename: 'unattempted.pdf',
+				mimeType: 'application/pdf'
+			}
+		])).rejects.toThrow('Attachment object storage failed');
+
+		expect(r2Service.putObj).toHaveBeenCalledTimes(2);
+		expect(recorder.operationLog.some(operation => (
+			operation.type === 'update'
+			&& operation.bindings.includes(attConst.status.FAILED)
+			&& operation.bindings.includes('BATCH_ABORTED')
+			&& operation.bindings.includes(attConst.status.PENDING)
+		))).toBe(true);
 	});
 
 	it('uploads duplicate received attachment objects once', async () => {
@@ -580,7 +879,7 @@ describe('attachment access control', () => {
 		]);
 
 		expect(r2Service.putObj).toHaveBeenCalledTimes(1);
-		expect(recorder.operationLog).toHaveLength(1);
+		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'update']);
 		expect(recorder.operationLog[0].bindings).toEqual(expect.arrayContaining(['first.pdf', 'second.pdf']));
 	});
 
@@ -601,6 +900,67 @@ describe('attachment access control', () => {
 			contentDisposition: 'inline',
 			cacheControl: 'max-age=259200'
 		});
+	});
+
+	it('keeps sent inline rows pending until their objects are confirmed', async () => {
+		const recorder = createInsertDbStub();
+		r2Service.putObj.mockImplementation(async (...args) => {
+			recorder.operationLog.push({ type: 'put', args });
+		});
+
+		await attService.saveArticleAtt({ env: { db: recorder.db } }, [{
+			key: 'attachments/stateful-inline.png',
+			buff: new Uint8Array([1]),
+			filename: 'stateful-inline.png',
+			mimeType: 'image/png',
+			contentId: 'cid-stateful'
+		}], 71, 301, 201);
+
+		expect(recorder.operationLog.map(operation => operation.type))
+			.toEqual(['insert', 'put', 'update']);
+		expect(recorder.operationLog[0].bindings).toContain(attConst.status.PENDING);
+		expect(recorder.operationLog[2].bindings).toContain(attConst.status.READY);
+	});
+
+	it('marks unattempted inline attachments failed when an upload batch aborts', async () => {
+		const recorder = createInsertDbStub();
+		r2Service.putObj
+			.mockImplementationOnce(async (...args) => {
+				recorder.operationLog.push({ type: 'put', args });
+			})
+			.mockRejectedValueOnce(new Error('second inline upload failed'));
+
+		await expect(attService.saveArticleAtt({ env: { db: recorder.db } }, [
+			{
+				key: 'attachments/first.png',
+				buff: new Uint8Array([1]),
+				filename: 'first.png',
+				mimeType: 'image/png',
+				contentId: 'cid-first'
+			},
+			{
+				key: 'attachments/second.png',
+				buff: new Uint8Array([2]),
+				filename: 'second.png',
+				mimeType: 'image/png',
+				contentId: 'cid-second'
+			},
+			{
+				key: 'attachments/unattempted.png',
+				buff: new Uint8Array([3]),
+				filename: 'unattempted.png',
+				mimeType: 'image/png',
+				contentId: 'cid-unattempted'
+			}
+		], 7, 30, 20)).rejects.toThrow('second inline upload failed');
+
+		expect(r2Service.putObj).toHaveBeenCalledTimes(2);
+		expect(recorder.operationLog.some(operation => (
+			operation.type === 'update'
+			&& operation.bindings.includes(attConst.status.FAILED)
+			&& operation.bindings.includes('BATCH_ABORTED')
+			&& operation.bindings.includes(attConst.status.PENDING)
+		))).toBe(true);
 	});
 
 	it('uploads duplicate sent inline attachment objects once', async () => {
@@ -625,8 +985,38 @@ describe('attachment access control', () => {
 		], 7, 30, 20);
 
 		expect(r2Service.putObj).toHaveBeenCalledTimes(1);
-		expect(recorder.operationLog).toHaveLength(1);
+		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'update']);
 		expect(recorder.operationLog[0].bindings).toEqual(expect.arrayContaining(['cid-1', 'cid-2']));
+	});
+
+	it('uses a buffered duplicate when the first inline row only references an existing key', async () => {
+		const recorder = createInsertDbStub();
+		const existsSpy = vi.spyOn(r2Service, 'exists');
+		r2Service.putObj.mockResolvedValue();
+
+		try {
+			await attService.saveArticleAtt({ env: { db: recorder.db } }, [
+				{
+					key: 'attachments/mixed.png',
+					filename: 'reference.png',
+					mimeType: 'image/png',
+					contentId: 'cid-reference'
+				},
+				{
+					key: 'attachments/mixed.png',
+					buff: new Uint8Array([9]),
+					filename: 'buffered.png',
+					mimeType: 'image/png',
+					contentId: 'cid-buffered'
+				}
+			], 7, 30, 20);
+
+			expect(r2Service.putObj).toHaveBeenCalledTimes(1);
+			expect(r2Service.putObj.mock.calls[0][2]).toEqual(new Uint8Array([9]));
+			expect(existsSpy).not.toHaveBeenCalled();
+		} finally {
+			existsSpy.mockRestore();
+		}
 	});
 
 	it('omits legacy non-ASCII Content-Disposition metadata from KV responses', async () => {
@@ -746,6 +1136,23 @@ describe('attachment access control', () => {
 		}
 	});
 
+	it('uses an S3 HEAD request for object existence checks', async () => {
+		const send = vi.fn(async command => {
+			expect(command.constructor.name).toBe('HeadObjectCommand');
+			return {};
+		});
+		const clientSpy = vi.spyOn(s3Service, 'client').mockResolvedValue({ send });
+		const settingSpy = vi.spyOn(settingService, 'query').mockResolvedValue({ bucket: 'bucket' });
+
+		try {
+			expect(await s3Service.exists({ env: {} }, 'attachments/file.pdf')).toBe(true);
+			expect(send).toHaveBeenCalledOnce();
+		} finally {
+			clientSpy.mockRestore();
+			settingSpy.mockRestore();
+		}
+	});
+
 	it('uses an ASCII RFC 5987 download header for non-ASCII filenames', async () => {
 		const filename = '工程全过程造价咨询服务方案.pdf';
 		const recorder = createDbStub({
@@ -833,6 +1240,12 @@ describe('attachment access control', () => {
 		const response = await attService.downloadAny({ env: { db: recorder.db } }, { attId: '10' });
 
 		expect(response.status).toBe(200);
-		expect(recorder.calls[0].bindings).toEqual([10, attConst.type.ATT]);
+		expect(recorder.calls[0].bindings).toEqual([
+			10,
+			attConst.type.ATT,
+			attConst.status.READY,
+			emailConst.status.SAVING,
+			emailConst.status.FAILED
+		]);
 	});
 });

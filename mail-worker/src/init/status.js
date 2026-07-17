@@ -22,8 +22,16 @@ const REQUIRED_TABLES = [
 
 const REQUIRED_INDEXES = [
 	'idx_oauth_platform_user_unique',
-	'idx_oauth_auth_state_initiator_expires_at'
+	'idx_oauth_auth_state_initiator_expires_at',
+	'idx_email_receive_recovery',
+	'idx_email_receive_recovery_due',
+	'idx_attachments_email_status_key'
 ];
+
+const REQUIRED_COLUMNS = {
+	email: ['attachment_count', 'recovery_after'],
+	attachments: ['status', 'message']
+};
 
 function hasText(value) {
 	return typeof value === 'string' && value.trim().length > 0;
@@ -60,11 +68,12 @@ export async function getBootstrapStatus(c) {
 
 	let initialized = false;
 	let adminCreated = false;
+	let schemaReady = false;
 	if (bindings.d1) {
 		try {
 			const tablePlaceholders = REQUIRED_TABLES.map(() => '?').join(',');
 			const indexPlaceholders = REQUIRED_INDEXES.map(() => '?').join(',');
-			const [tableRows, indexRows] = await Promise.all([
+			const [tableRows, indexRows, emailColumnRows, attachmentColumnRows] = await Promise.all([
 				c.env.db.prepare(`
 					SELECT name
 					FROM sqlite_master
@@ -74,14 +83,21 @@ export async function getBootstrapStatus(c) {
 					SELECT name
 					FROM sqlite_master
 					WHERE type = 'index' AND name IN (${indexPlaceholders})
-				`).bind(...REQUIRED_INDEXES).all()
+				`).bind(...REQUIRED_INDEXES).all(),
+				c.env.db.prepare('PRAGMA table_info(email)').all(),
+				c.env.db.prepare('PRAGMA table_info(attachments)').all()
 			]);
 			const tableNames = new Set((tableRows.results || []).map(row => row.name));
 			const indexNames = new Set((indexRows.results || []).map(row => row.name));
 			const hasRequiredTables = REQUIRED_TABLES.every(name => tableNames.has(name));
 			const hasRequiredIndexes = REQUIRED_INDEXES.every(name => indexNames.has(name));
+			const emailColumnNames = new Set((emailColumnRows.results || []).map(row => row.name));
+			const attachmentColumnNames = new Set((attachmentColumnRows.results || []).map(row => row.name));
+			const hasRequiredColumns = REQUIRED_COLUMNS.email.every(name => emailColumnNames.has(name))
+				&& REQUIRED_COLUMNS.attachments.every(name => attachmentColumnNames.has(name));
+			schemaReady = hasRequiredTables && hasRequiredIndexes && hasRequiredColumns;
 
-			if (hasRequiredTables && hasRequiredIndexes) {
+			if (schemaReady) {
 				initialized = !!await c.env.db.prepare('SELECT 1 AS initialized FROM setting LIMIT 1').first();
 				if (initialized && configuration.admin) {
 					adminCreated = !!await c.env.db.prepare(`
@@ -111,6 +127,7 @@ export async function getBootstrapStatus(c) {
 	return {
 		initialized,
 		adminCreated,
+		schemaReady,
 		ready: initialized
 			&& adminCreated
 			&& bindings.d1
