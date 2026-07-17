@@ -6,7 +6,11 @@ const mocks = vi.hoisted(() => ({
 	getToken: vi.fn(),
 	selectUser: vi.fn(),
 	updateUserInfo: vi.fn(),
+	upgradePasswordHash: vi.fn(),
 	verifyPassword: vi.fn(),
+	assertAllowed: vi.fn(),
+	recordFailure: vi.fn(),
+	clearRateLimit: vi.fn(),
 	generateToken: vi.fn(),
 	uuid: vi.fn()
 }));
@@ -20,13 +24,22 @@ vi.mock('../src/security/user-context', () => ({
 vi.mock('../src/service/user-service', () => ({
 	default: {
 		selectByEmailIncludeDel: mocks.selectUser,
-		updateUserInfo: mocks.updateUserInfo
+		updateUserInfo: mocks.updateUserInfo,
+		upgradePasswordHash: mocks.upgradePasswordHash
 	}
 }));
 
 vi.mock('../src/utils/crypto-utils', () => ({
 	default: {
 		verifyPassword: mocks.verifyPassword
+	}
+}));
+
+vi.mock('../src/service/auth-rate-limit-service', () => ({
+	default: {
+		assertAllowed: mocks.assertAllowed,
+		recordFailure: mocks.recordFailure,
+		clear: mocks.clearRateLimit
 	}
 }));
 
@@ -52,7 +65,11 @@ describe('login service logout', () => {
 			isDel: 0
 		});
 		mocks.updateUserInfo.mockResolvedValue();
+		mocks.upgradePasswordHash.mockImplementation(async (_c, userRow) => userRow);
 		mocks.verifyPassword.mockResolvedValue(true);
+		mocks.assertAllowed.mockResolvedValue({ scope: 'login', identityHash: 'identity-hash' });
+		mocks.recordFailure.mockResolvedValue();
+		mocks.clearRateLimit.mockResolvedValue();
 		mocks.generateToken.mockResolvedValue('jwt');
 		mocks.uuid.mockReturnValue('new-session');
 	});
@@ -79,6 +96,27 @@ describe('login service logout', () => {
 		expect(stored.tokens).toHaveLength(10);
 		expect(stored.tokens).not.toContain('session-0');
 		expect(stored.tokens.at(-1)).toBe('new-session');
+	});
+
+	it('does not issue a token after the authentication reservation becomes stale', async () => {
+		const { default: loginService } = await import('../src/service/login-service');
+		mocks.clearRateLimit.mockRejectedValueOnce(Object.assign(new Error('stale reservation'), {
+			code: 429
+		}));
+		const c = {
+			env: {
+				kv: {
+					get: vi.fn(),
+					put: vi.fn()
+				}
+			}
+		};
+
+		await expect(loginService.login(c, {
+			email: 'user@example.com',
+			password: 'password'
+		})).rejects.toMatchObject({ code: 429 });
+		expect(mocks.generateToken).not.toHaveBeenCalled();
 	});
 
 	it('removes only the current session and keeps the remaining sessions expiring', async () => {

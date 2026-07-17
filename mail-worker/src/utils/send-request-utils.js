@@ -1,5 +1,6 @@
 import BizError from '../error/biz-error';
 import verifyUtils from './verify-utils';
+import { readBoundedJson } from './request-body-utils';
 
 export const SEND_JSON_MAX_BYTES = 24 * 1024 * 1024;
 export const SEND_MAX_RECIPIENTS = 10;
@@ -12,49 +13,7 @@ const DEFAULT_ATTACHMENT_CONTENT_TYPE = 'application/octet-stream';
 const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/;
 
 export async function readBoundedSendJson(c, limitMessage = 'send JSON body exceeds 24 MiB') {
-	const declaredLength = Number(c.req.header('content-length'));
-	if (Number.isFinite(declaredLength) && declaredLength > SEND_JSON_MAX_BYTES) {
-		throw new BizError(limitMessage, 413);
-	}
-
-	const body = c.req.raw.body;
-	if (!body) {
-		throw new BizError('invalid JSON body', 400);
-	}
-
-	const reader = body.getReader();
-	const decoder = new TextDecoder();
-	const parts = [];
-	let size = 0;
-
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			size += value.byteLength;
-			if (size > SEND_JSON_MAX_BYTES) {
-				try {
-					await reader.cancel();
-				} catch (e) {
-					// The size error below is authoritative even if cancellation fails.
-				}
-				throw new BizError(limitMessage, 413);
-			}
-
-			parts.push(decoder.decode(value, { stream: true }));
-		}
-		parts.push(decoder.decode());
-	} catch (e) {
-		if (e instanceof BizError) throw e;
-		throw new BizError('invalid JSON body', 400);
-	}
-
-	try {
-		return JSON.parse(parts.join(''));
-	} catch (e) {
-		throw new BizError('invalid JSON body', 400);
-	}
+	return await readBoundedJson(c, SEND_JSON_MAX_BYTES, limitMessage);
 }
 
 export function normalizeSendRequest(params, { dedupeRecipients = false } = {}) {

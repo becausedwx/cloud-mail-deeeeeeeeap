@@ -2,9 +2,16 @@ import app from '../hono/hono';
 import result from '../model/result';
 import publicService from '../service/public-service';
 import { readBoundedSendJson } from '../utils/send-request-utils';
+import { readBoundedJson } from '../utils/request-body-utils';
+
+const AUTH_JSON_MAX_BYTES = 32 * 1024;
 
 app.post('/public/genToken', async (c) => {
-	const data = await publicService.genToken(c, await c.req.json());
+	const data = await publicService.genToken(c, await readBoundedJson(
+		c,
+		AUTH_JSON_MAX_BYTES,
+		'authentication JSON body exceeds 32 KiB'
+	));
 	return c.json(result.ok(data));
 });
 

@@ -162,6 +162,25 @@ describe('administrator security boundaries', () => {
 		})).rejects.toMatchObject({ code: 403 });
 	});
 
+	it('rejects oversized passwords before authenticated reset or user creation writes', async () => {
+		const oversizedPassword = 'x'.repeat(31);
+		await expect(userService.resetPassword(
+			{ env: {} },
+			{ password: oversizedPassword },
+			1
+		)).rejects.toMatchObject({ code: 501 });
+		await expect(userService.add({
+			env: {
+				admin: 'admin@example.com',
+				domain: ['example.com']
+			}
+		}, {
+			email: 'member@example.com',
+			password: oversizedPassword,
+			type: 1
+		})).rejects.toMatchObject({ code: 501 });
+	});
+
 	it('does not allow a regular user to reserve the administrator address as a secondary mailbox', async () => {
 		await initializeDatabase();
 		await registerTestUser('member@example.com', 'member-password');

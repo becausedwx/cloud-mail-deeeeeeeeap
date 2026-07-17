@@ -242,6 +242,7 @@ const maintenanceService = {
 			await dbInit.v3_0DB(c);
 			await dbInit.v3_1DB(c);
 			await dbInit.v3_2DB(c);
+			await dbInit.v3_3DB(c);
 			return this.health(c);
 		}
 

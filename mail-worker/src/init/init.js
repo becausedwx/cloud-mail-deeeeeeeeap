@@ -37,6 +37,7 @@ const dbInit = {
 		await this.v3_0DB(c);
 		await this.v3_1DB(c);
 		await this.v3_2DB(c);
+		await this.v3_3DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -145,6 +146,27 @@ const dbInit = {
 				window_hour INTEGER PRIMARY KEY,
 				count INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0)
 			)
+		`).run();
+	},
+
+	async v3_3DB(c) {
+		await c.env.db.prepare(`
+			CREATE TABLE IF NOT EXISTS auth_failure_limit (
+				scope TEXT NOT NULL,
+				identity_hash TEXT NOT NULL,
+				fail_count INTEGER NOT NULL DEFAULT 0 CHECK (fail_count >= 0),
+				in_flight INTEGER NOT NULL DEFAULT 0 CHECK (in_flight >= 0),
+				window_started_at INTEGER NOT NULL,
+				in_flight_started_at INTEGER NOT NULL DEFAULT 0,
+				reservation_generation TEXT NOT NULL DEFAULT '',
+				lock_until INTEGER NOT NULL DEFAULT 0,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (scope, identity_hash)
+			)
+		`).run();
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_auth_failure_limit_updated_at
+			ON auth_failure_limit (updated_at)
 		`).run();
 	},
 

@@ -59,11 +59,53 @@ const userService = {
 
 		const { password } = params;
 
-		if (!password || password.length < 6) {
+		if (typeof password !== 'string' || password.length < 6) {
 			throw new BizError(t('pwdMinLength'));
+		}
+		if (password.length > 30) {
+			throw new BizError(t('pwdLengthLimit'));
 		}
 		const { salt, hash } = await cryptoUtils.hashPassword(password);
 		await orm(c).update(user).set({ password: hash, salt: salt }).where(eq(user.userId, userId)).run();
+	},
+
+	async compareAndSetPasswordHash(c, userId, { hash, salt }, expected) {
+		const result = await c.env.db.prepare(`
+			UPDATE user
+			SET password = ?, salt = ?
+			WHERE user_id = ?
+			  AND password = ?
+			  AND salt = ?
+		`).bind(hash, salt, userId, expected.hash, expected.salt).run();
+		return Number(result?.meta?.changes || 0) === 1;
+	},
+
+	async upgradePasswordHash(c, userRow, password) {
+		if (!cryptoUtils.needsPasswordUpgrade(userRow.password)) {
+			return userRow;
+		}
+
+		const upgradedPassword = await cryptoUtils.hashPassword(password);
+		const updated = await this.compareAndSetPasswordHash(
+			c,
+			userRow.userId,
+			upgradedPassword,
+			{ hash: userRow.password, salt: userRow.salt }
+		);
+		if (updated) {
+			return {
+				...userRow,
+				password: upgradedPassword.hash,
+				salt: upgradedPassword.salt
+			};
+		}
+
+		const currentUserRow = await this.selectByIdIncludeDel(c, userRow.userId);
+		if (currentUserRow
+			&& await cryptoUtils.verifyPassword(password, currentUserRow.salt, currentUserRow.password)) {
+			return currentUserRow;
+		}
+		return null;
 	},
 
 	selectByEmail(c, email) {
@@ -333,8 +375,11 @@ const userService = {
 			throw new BizError(t('notEmailDomain'));
 		}
 
-		if (password.length < 6) {
+		if (typeof password !== 'string' || password.length < 6) {
 			throw new BizError(t('pwdMinLength'));
+		}
+		if (password.length > 30) {
+			throw new BizError(t('pwdLengthLimit'));
 		}
 
 		const accountRow = await accountService.selectByEmailIncludeDel(c, email);

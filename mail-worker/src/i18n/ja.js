@@ -1,5 +1,6 @@
 const ja = {
 	IncorrectPwd: 'パスワードが正しくありません',
+	authTooManyFailures: '認証の失敗回数が多すぎます。しばらくしてから再試行してください',
 	addAccountDisabled: 'メールアドレス追加機能は無効です',
 	regDisabled: '登録機能は無効です',
 	emptyEmail: 'メールアドレスを入力してください',

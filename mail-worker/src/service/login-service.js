@@ -20,6 +20,7 @@ import { toUtc } from '../utils/date-uitil';
 import { t } from '../i18n/i18n.js';
 import verifyRecordService from './verify-record-service';
 import reqUtils from '../utils/req-utils';
+import authRateLimitService from './auth-rate-limit-service';
 
 const loginService = {
 
@@ -55,6 +56,10 @@ const loginService = {
 
 		if (emailUtils.getName(email).length > 64) {
 			throw new BizError(t('emailLengthLimit'));
+		}
+
+		if (typeof password !== 'string') {
+			throw new BizError(t('pwdMinLength'));
 		}
 
 		if (password.length > 30) {
@@ -267,22 +272,41 @@ const loginService = {
 			throw new BizError(t('emailAndPwdEmpty'));
 		}
 
+		const rateIdentity = noVerifyPwd
+			? null
+			: await authRateLimitService.assertAllowed(c, 'login', email);
+
 		const userRow = await userService.selectByEmailIncludeDel(c, email);
 
 		if (!userRow) {
+			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
 			throw new BizError(t('notExistUser'));
 		}
 
 		if(userRow.isDel === isDel.DELETE) {
+			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
 			throw new BizError(t('isDelUser'));
 		}
 
 		if(userRow.status === userConst.status.BAN) {
+			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
 			throw new BizError(t('isBanUser'));
 		}
 
-		if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password) && !noVerifyPwd) {
-			throw new BizError(t('IncorrectPwd'));
+		if (!noVerifyPwd) {
+			if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
+				if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
+				throw new BizError(t('IncorrectPwd'));
+			}
+
+			const currentUserRow = await userService.upgradePasswordHash(c, userRow, password);
+			if (!currentUserRow) {
+				if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
+				throw new BizError(t('IncorrectPwd'));
+			}
+			Object.assign(userRow, currentUserRow);
+
+			await authRateLimitService.clear(c, rateIdentity);
 		}
 
 		const uuid = uuidv4();

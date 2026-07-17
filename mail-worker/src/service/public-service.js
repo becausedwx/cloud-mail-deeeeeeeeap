@@ -18,6 +18,7 @@ import { truncateByBytes, LIKE_PATTERN_MAX_BYTES } from '../utils/sql-utils';
 import accountService from './account-service';
 import emailService from './email-service';
 import { normalizeSendRequest } from '../utils/send-request-utils';
+import authRateLimitService from './auth-rate-limit-service';
 
 const PUBLIC_PREVIEW_TEXT_LENGTH = 240;
 const PUBLIC_SEND_HOURLY_LIMIT = 100;
@@ -215,6 +216,12 @@ const publicService = {
 				throw new BizError(t('notEmailDomain'));
 			}
 
+			if (emailRow.password !== undefined
+				&& emailRow.password !== null
+				&& typeof emailRow.password !== 'string') {
+				throw new BizError(t('pwdLengthLimit'));
+			}
+
 			if (emailRow.password && (emailRow.password.length < 6 || emailRow.password.length > 30)) {
 				throw new BizError(t(emailRow.password.length < 6 ? 'pwdMinLength' : 'pwdLengthLimit'));
 			}
@@ -272,8 +279,26 @@ const publicService = {
 	},
 
 	async genToken(c, params) {
+		const rateIdentity = await authRateLimitService.assertAllowed(
+			c,
+			'public-gen-token',
+			params?.email
+		);
+		let userRow;
+		try {
+			userRow = await this.verifyUser(c, params);
+		} catch (e) {
+			await authRateLimitService.recordFailure(c, rateIdentity);
+			throw e;
+		}
 
-		await this.verifyUser(c, params)
+		const currentUserRow = await userService.upgradePasswordHash(c, userRow, params.password);
+		if (!currentUserRow) {
+			await authRateLimitService.recordFailure(c, rateIdentity);
+			throw new BizError(t('IncorrectPwd'));
+		}
+		await authRateLimitService.clear(c, rateIdentity);
+		userRow = currentUserRow;
 
 		const uuid = uuidv4();
 
@@ -299,6 +324,8 @@ const publicService = {
 		if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
 			throw new BizError(t('IncorrectPwd'));
 		}
+
+		return userRow;
 	}
 
 }
