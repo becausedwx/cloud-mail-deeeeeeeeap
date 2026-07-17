@@ -21,7 +21,7 @@ const { default: kvObjService } = await import('../src/service/kv-obj-service');
 const { default: attService } = await import('../src/service/att-service');
 const { default: worker } = await import('../src/index');
 
-function createDbStub({ protectedKey = null, downloadRow = null } = {}) {
+function createDbStub({ attachmentRows = [], downloadRow = null, publicLookupError = null } = {}) {
 	const calls = [];
 
 	return {
@@ -37,7 +37,12 @@ function createDbStub({ protectedKey = null, downloadRow = null } = {}) {
 					},
 					async first() {
 						if (sql.includes('WHERE key = ?')) {
-							return call.bindings[0] === protectedKey ? { att_id: 1 } : null;
+							if (publicLookupError) throw publicLookupError;
+							const [key, embedType] = call.bindings;
+							const row = attachmentRows.find(item => item.key === key && (
+								item.type === embedType
+							));
+							return row ? { att_id: row.attId || 1 } : null;
 						}
 
 						if (sql.includes('WHERE att_id = ?')) {
@@ -78,6 +83,52 @@ function createInsertDbStub(operationLog = []) {
 	};
 }
 
+function createAttachmentOwnerLookupDbStub(attachmentRows = []) {
+	const calls = [];
+
+	return {
+		calls,
+		db: {
+			prepare(sql) {
+				const call = { sql, bindings: [] };
+				calls.push(call);
+				return {
+					bind(...args) {
+						call.bindings = args;
+						return this;
+					},
+					async raw() {
+						const keys = call.bindings.filter(value => (
+							typeof value === 'string' && value.startsWith('attachments/')
+						));
+						const requestedUserId = call.bindings.find(value => Number.isInteger(value));
+						return attachmentRows
+							.filter(row => keys.includes(row.key)
+								&& (requestedUserId === undefined || row.user_id === requestedUserId))
+							.map(row => [
+								row.att_id,
+								row.user_id,
+								row.email_id,
+								row.account_id,
+								row.key,
+								row.filename,
+								row.mime_type,
+								row.size,
+								row.status,
+								row.type,
+								row.disposition,
+								row.related,
+								row.content_id,
+								row.encoding,
+								row.create_time
+							]);
+					}
+				};
+			}
+		}
+	};
+}
+
 function createKvStub(body = 'ok') {
 	return {
 		async getWithMetadata() {
@@ -109,7 +160,13 @@ describe('attachment access control', () => {
 	});
 
 	it('blocks registered normal attachment direct links from worker static routing', async () => {
-		const recorder = createDbStub({ protectedKey: 'attachments/private.txt' });
+		const recorder = createDbStub({
+			attachmentRows: [{
+				key: 'attachments/private.txt',
+				type: attConst.type.ATT,
+				contentId: null
+			}]
+		});
 		const request = new Request('http://example.com/attachments/private.txt');
 		const ctx = createExecutionContext();
 
@@ -117,11 +174,20 @@ describe('attachment access control', () => {
 		await waitOnExecutionContext(ctx);
 
 		expect(response.status).toBe(404);
-		expect(recorder.calls[0].bindings).toEqual(['attachments/private.txt', attConst.type.ATT]);
+		expect(recorder.calls[0].bindings).toEqual([
+			'attachments/private.txt',
+			attConst.type.EMBED
+		]);
 	});
 
 	it('blocks registered normal attachment direct links from /api/oss', async () => {
-		const recorder = createDbStub({ protectedKey: 'attachments/private.txt' });
+		const recorder = createDbStub({
+			attachmentRows: [{
+				key: 'attachments/private.txt',
+				type: attConst.type.ATT,
+				contentId: null
+			}]
+		});
 		const request = new Request('http://example.com/api/oss/attachments/private.txt');
 		const ctx = createExecutionContext();
 
@@ -129,10 +195,63 @@ describe('attachment access control', () => {
 		await waitOnExecutionContext(ctx);
 
 		expect(response.status).toBe(404);
-		expect(recorder.calls[0].bindings).toEqual(['attachments/private.txt', attConst.type.ATT]);
+		expect(recorder.calls[0].bindings).toEqual([
+			'attachments/private.txt',
+			attConst.type.EMBED
+		]);
 	});
 
-	it('keeps unregistered inline attachment and static object links compatible', async () => {
+	it('serves D1-authorized inline attachments from both anonymous routes', async () => {
+		const recorder = createDbStub({
+			attachmentRows: [{
+				key: 'attachments/inline-image.png',
+				type: attConst.type.EMBED,
+				contentId: 'cid-1'
+			}]
+		});
+		r2Service.getObj.mockImplementation(async () => new Response('inline', {
+			headers: { 'Content-Type': 'image/png' }
+		}));
+
+		const directResponse = await worker.fetch(
+			new Request('http://example.com/attachments/inline-image.png'),
+			{ ...testEnv, db: recorder.db },
+			createExecutionContext()
+		);
+		const apiResponse = await worker.fetch(
+			new Request('http://example.com/api/oss/attachments/inline-image.png'),
+			{ ...testEnv, db: recorder.db },
+			createExecutionContext()
+		);
+
+		expect(directResponse.status).toBe(200);
+		expect(await directResponse.text()).toBe('inline');
+		expect(apiResponse.status).toBe(200);
+		expect(await apiResponse.text()).toBe('inline');
+		expect(r2Service.getObj).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not treat a content ID alone as public-inline authorization', async () => {
+		const recorder = createDbStub({
+			attachmentRows: [{
+				key: 'attachments/legacy-inline.png',
+				type: attConst.type.ATT,
+				contentId: 'legacy-cid'
+			}]
+		});
+		r2Service.getObj.mockResolvedValue(new Response('must-not-leak'));
+
+		const response = await worker.fetch(
+			new Request('http://example.com/attachments/legacy-inline.png'),
+			{ ...testEnv, db: recorder.db },
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(404);
+		expect(r2Service.getObj).not.toHaveBeenCalled();
+	});
+
+	it('blocks orphan attachment objects while keeping static object links compatible', async () => {
 		const recorder = createDbStub();
 		const ctx = createExecutionContext();
 		r2Service.getObj.mockImplementation(async (c, key) => new Response(
@@ -145,25 +264,57 @@ describe('attachment access control', () => {
 			{ ...testEnv, db: recorder.db },
 			ctx
 		);
+		const apiInlineResponse = await worker.fetch(
+			new Request('http://example.com/api/oss/attachments/inline-image.png'),
+			{ ...testEnv, db: recorder.db },
+			ctx
+		);
 		const staticResponse = await worker.fetch(
 			new Request('http://example.com/static/background/bg.png'),
 			{ ...testEnv, db: recorder.db },
 			ctx
 		);
+		const apiStaticResponse = await worker.fetch(
+			new Request('http://example.com/api/oss/static/background/bg.png'),
+			{ ...testEnv, db: recorder.db },
+			ctx
+		);
 		await waitOnExecutionContext(ctx);
 
-		expect(inlineResponse.status).toBe(200);
-		expect(await inlineResponse.text()).toBe('inline');
+		expect(inlineResponse.status).toBe(404);
+		expect(apiInlineResponse.status).toBe(404);
 		expect(staticResponse.status).toBe(200);
 		expect(await staticResponse.text()).toBe('static');
-		expect(r2Service.getObj).toHaveBeenCalledWith(
-			expect.objectContaining({ env: expect.objectContaining({ db: recorder.db }) }),
+		expect(apiStaticResponse.status).toBe(404);
+		expect(r2Service.getObj).not.toHaveBeenCalledWith(
+			expect.anything(),
 			'attachments/inline-image.png'
 		);
 		expect(r2Service.getObj).toHaveBeenCalledWith(
 			expect.objectContaining({ env: expect.objectContaining({ db: recorder.db }) }),
 			'static/background/bg.png'
 		);
+		expect(r2Service.getObj).toHaveBeenCalledTimes(1);
+	});
+
+	it('fails closed when the D1 public-attachment lookup is unavailable', async () => {
+		const recorder = createDbStub({ publicLookupError: new Error('D1 unavailable') });
+		r2Service.getObj.mockResolvedValue(new Response('must-not-leak'));
+
+		const missingBindingResponse = await worker.fetch(
+			new Request('http://example.com/attachments/inline-image.png'),
+			{ ...testEnv, db: undefined },
+			createExecutionContext()
+		);
+		const lookupErrorResponse = await worker.fetch(
+			new Request('http://example.com/api/oss/attachments/inline-image.png'),
+			{ ...testEnv, db: recorder.db },
+			createExecutionContext()
+		);
+
+		expect(missingBindingResponse.status).toBe(404);
+		expect(lookupErrorResponse.status).toBe(404);
+		expect(r2Service.getObj).not.toHaveBeenCalled();
 	});
 
 	it('returns 404 response for missing static objects', async () => {
@@ -252,6 +403,41 @@ describe('attachment access control', () => {
 		expect(response.headers.get('Content-Type')).toBe('text/plain');
 		expect(response.headers.get('Cache-Control')).toBe('private, max-age=0, no-store');
 		expect(r2Service.getObj).toHaveBeenCalledWith({ env: { db: recorder.db } }, 'attachments/private.txt');
+	});
+
+	it('does not let another user promote a private attachment key to public inline content', async () => {
+		const recorder = createAttachmentOwnerLookupDbStub([{
+			att_id: 10,
+			user_id: 7,
+			email_id: 20,
+			account_id: 30,
+			key: 'attachments/victim-private.png',
+			filename: 'victim-private.png',
+			mime_type: 'image/png',
+			size: 6,
+			status: 0,
+			type: attConst.type.ATT,
+			content_id: null,
+			create_time: '2026-07-17 00:00:00'
+		}]);
+		const settingSpy = vi.spyOn(settingService, 'query').mockResolvedValue({
+			r2Domain: 'https://objects.example.com'
+		});
+		r2Service.getObj.mockResolvedValue(new Response('secret'));
+
+		try {
+			const result = await attService.toImageUrlHtml(
+				{ env: { db: recorder.db } },
+				'<img src="attachments/victim-private.png">',
+				8
+			);
+
+			expect(result.imageDataList).toEqual([]);
+			expect(r2Service.getObj).not.toHaveBeenCalled();
+			expect(recorder.calls.some(call => call.bindings.includes(8))).toBe(true);
+		} finally {
+			settingSpy.mockRestore();
+		}
 	});
 
 	it('streams KV object bodies without changing their contents', async () => {
@@ -357,7 +543,8 @@ describe('attachment access control', () => {
 				content: new Uint8Array([2]),
 				filename: '内嵌图片.png',
 				mimeType: 'image/png',
-				contentId: 'cid-1'
+				contentId: 'cid-1',
+				type: attConst.type.EMBED
 			}
 		]);
 
@@ -368,6 +555,7 @@ describe('attachment access control', () => {
 			cacheControl: 'max-age=259200'
 		});
 		expect(recorder.operationLog.map(operation => operation.type)).toEqual(['insert', 'put', 'put']);
+		expect(recorder.operationLog[0].bindings).toContain(attConst.type.EMBED);
 	});
 
 	it('uploads duplicate received attachment objects once', async () => {

@@ -133,6 +133,7 @@ import {debounce} from "@/utils/debounce.js";
 import loading from "@/components/loading/index.vue";
 import {useRoute} from "vue-router";
 import {useI18n} from 'vue-i18n';
+import {formatSenderTooltip} from './tooltip.js';
 
 defineOptions({
   name: 'analysis'
@@ -350,9 +351,7 @@ function createSenderPie() {
         color: topic.value.color
       },
       backgroundColor: topic.value.background,
-      formatter: params => {
-        return `${params.marker} ${params.name}： ${params.value} (${params.percent}%)`;
-      }
+      formatter: formatSenderTooltip
     },
     legend: {
       type: 'scroll',

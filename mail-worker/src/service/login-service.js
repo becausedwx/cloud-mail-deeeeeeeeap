@@ -25,6 +25,9 @@ const loginService = {
 	async register(c, params, oauth = false) {
 
 		const { email, password, token, code } = params;
+		if (emailUtils.isSameAddress(email, c.env.admin)) {
+			throw new BizError('Administrator account must be created through the initialization flow', 403);
+		}
 
 		let { regKey, register, registerVerify, regVerifyCount, minEmailPrefix, emailPrefixFilter } = await settingService.query(c)
 

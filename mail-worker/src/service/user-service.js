@@ -33,7 +33,7 @@ const userService = {
 		const [account, roleRow, permKeys] = await Promise.all([
 			accountService.selectByEmailIncludeDel(c, userRow.email),
 			roleService.selectById(c, userRow.type),
-			userRow.email === c.env.admin ? Promise.resolve(['*']) : permService.userPermKeys(c, userId)
+			emailUtils.isSameAddress(userRow.email, c.env.admin) ? Promise.resolve(['*']) : permService.userPermKeys(c, userId)
 		]);
 
 		const user = {};
@@ -46,7 +46,7 @@ const userService = {
 		user.role = roleRow;
 		user.type = userRow.type;
 
-		if (c.env.admin === userRow.email) {
+		if (emailUtils.isSameAddress(userRow.email, c.env.admin)) {
 			user.role = constant.ADMIN_ROLE
 			user.type = 0;
 		}
@@ -96,6 +96,10 @@ const userService = {
 	},
 
 	async delete(c, userId) {
+		const userRow = await this.selectByIdIncludeDel(c, userId);
+		if (userRow && emailUtils.isSameAddress(userRow.email, c.env.admin)) {
+			throw new BizError('The current administrator account cannot be deleted', 403);
+		}
 		await orm(c).update(user).set({ isDel: isDel.DELETE }).where(eq(user.userId, userId)).run();
 		await c.env.kv.delete(kvConst.AUTH_INFO + userId)
 	},
@@ -103,6 +107,15 @@ const userService = {
 	async physicsDelete(c, params) {
 		let { userIds } = params;
 		userIds = userIds.split(',').map(Number);
+		for (const chunk of chunkArray(userIds)) {
+			const rows = await orm(c).select({ email: user.email }).from(user).where(inArray(user.userId, chunk)).all();
+			if (rows.some(row => emailUtils.isSameAddress(row.email, c.env.admin))) {
+				throw new BizError('The current administrator account cannot be deleted', 403);
+			}
+		}
+		for (const chunk of chunkArray(userIds, 20)) {
+			await Promise.all(chunk.map(userId => c.env.kv.delete(kvConst.AUTH_INFO + userId)));
+		}
 		await accountService.physicsDeleteByUserIds(c, userIds);
 		await oauthService.deleteByUserIds(c, userIds);
 		for (const chunk of chunkArray(userIds)) {
@@ -213,7 +226,7 @@ const userService = {
 				sendAction.hasPerm = false;
 			}
 
-			if (user.email === c.env.admin) {
+			if (emailUtils.isSameAddress(user.email, c.env.admin)) {
 				sendAction.sendType = constant.ADMIN_ROLE.sendType;
 				sendAction.sendCount = constant.ADMIN_ROLE.sendCount;
 				sendAction.hasPerm = true;
@@ -263,6 +276,12 @@ const userService = {
 	async setStatus(c, params) {
 
 		const { status, userId } = params;
+		const userRow = await this.selectByIdIncludeDel(c, userId);
+		if (userRow
+			&& emailUtils.isSameAddress(userRow.email, c.env.admin)
+			&& Number(status) !== userConst.status.NORMAL) {
+			throw new BizError('The current administrator account cannot be disabled', 403);
+		}
 
 		await orm(c)
 			.update(user)
@@ -314,6 +333,9 @@ const userService = {
 	async add(c, params) {
 
 		const { email, type, password } = params;
+		if (emailUtils.isSameAddress(email, c.env.admin)) {
+			throw new BizError('Administrator account must be created through the initialization flow', 403);
+		}
 
 		if (!c.env.domain.includes(emailUtils.getDomain(email))) {
 			throw new BizError(t('notEmailDomain'));

@@ -21,7 +21,7 @@ describe('first deployment bootstrap', () => {
 		});
 	});
 
-	it('keeps the setup page usable before initialization and becomes ready after init', async () => {
+	it('keeps the setup page usable until database and administrator bootstrap both finish', async () => {
 		const statusBeforeResponse = await SELF.fetch('http://example.com/api/init/status');
 		expect(statusBeforeResponse.status).toBe(200);
 		const statusBefore = await statusBeforeResponse.json();
@@ -67,7 +67,8 @@ describe('first deployment bootstrap', () => {
 			code: 200,
 			data: {
 				initialized: true,
-				ready: true
+				adminCreated: false,
+				ready: false
 			}
 		});
 
@@ -77,8 +78,33 @@ describe('first deployment bootstrap', () => {
 			code: 200,
 			data: {
 				initialized: true,
+				adminCreated: false,
+				ready: false
+			}
+		});
+
+		const adminResponse = await SELF.fetch('http://example.com/api/init/admin', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Cloud-Mail-Init-Secret': 'your-jwt-secret'
+			},
+			body: JSON.stringify({ password: 'secure-admin-password' })
+		});
+		expect(adminResponse.status).toBe(200);
+		expect(await adminResponse.text()).toBe('success');
+
+		const readyStatus = await (await SELF.fetch('http://example.com/api/init/status')).json();
+		expect(readyStatus).toMatchObject({
+			code: 200,
+			data: {
+				initialized: true,
+				adminCreated: true,
 				ready: true
 			}
 		});
+		const serializedReadyStatus = JSON.stringify(readyStatus);
+		expect(serializedReadyStatus).not.toContain('secure-admin-password');
+		expect(serializedReadyStatus).not.toContain('your-jwt-secret');
 	});
 });

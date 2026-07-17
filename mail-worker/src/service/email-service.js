@@ -320,7 +320,7 @@ const emailService = {
 
 		const { resendTokens, r2Domain, send, domainList } = await settingService.query(c);
 
-		let { imageDataList, html } = await attService.toImageUrlHtml(c, content);
+		let { imageDataList, html } = await attService.toImageUrlHtml(c, content, userId);
 
 		//判断是否关闭发件功能
 		if (send === settingConst.send.CLOSE) {
@@ -336,7 +336,7 @@ const emailService = {
 			return domainList.includes(domain);
 		});
 
-		if (c.env.admin !== userRow.email) {
+		if (!emailUtils.isSameAddress(userRow.email, c.env.admin)) {
 
 			//发件被禁用
 			if (roleRow.sendType === 'ban') {
@@ -351,7 +351,7 @@ const emailService = {
 		}
 
 		//如果不是管理员，权限设置了发送次数
-		if (c.env.admin !== userRow.email && roleRow.sendCount) {
+		if (!emailUtils.isSameAddress(userRow.email, c.env.admin) && roleRow.sendCount) {
 
 			if (userRow.sendCount >= roleRow.sendCount) {
 				if (roleRow.sendType === 'day') throw new BizError(t('daySendLimit'), 403);
@@ -375,7 +375,7 @@ const emailService = {
 			throw new BizError(t('sendEmailNotCurUser'));
 		}
 
-		if (c.env.admin !== userRow.email) {
+		if (!emailUtils.isSameAddress(userRow.email, c.env.admin)) {
 			//用户没有这个域名的使用权限
 			if(!roleService.hasAvailDomainPerm(roleRow.availDomain, accountRow.email)) {
 				throw new BizError(t('noDomainPermSend'),403)
@@ -813,7 +813,7 @@ const emailService = {
 				let { banEmail, availDomain } = roleRow;
 
 				//如果收件人没有这个域名的使用权限和有邮件拦截，就把邮件改为拒收状态
-				if (email !== c.env.admin) {
+				if (!emailUtils.isSameAddress(email, c.env.admin)) {
 
 					if (!roleService.hasAvailDomainPerm(availDomain, email)) {
 						emailValues.status = emailConst.status.BOUNCED;

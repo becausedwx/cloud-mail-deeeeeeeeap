@@ -1,3 +1,5 @@
+import { isDel, userConst } from '../const/entity-const';
+
 const REQUIRED_TABLES = [
 	'email_search',
 	'oauth',
@@ -48,6 +50,7 @@ export async function getBootstrapStatus(c) {
 	};
 
 	let initialized = false;
+	let adminCreated = false;
 	if (bindings.d1) {
 		try {
 			const placeholders = REQUIRED_TABLES.map(() => '?').join(',');
@@ -61,6 +64,25 @@ export async function getBootstrapStatus(c) {
 
 			if (hasRequiredTables) {
 				initialized = !!await c.env.db.prepare('SELECT 1 AS initialized FROM setting LIMIT 1').first();
+				if (initialized && configuration.admin) {
+					adminCreated = !!await c.env.db.prepare(`
+						SELECT 1 AS created
+						FROM user u
+						JOIN account a
+						  ON a.user_id = u.user_id
+						 AND a.email COLLATE NOCASE = u.email
+						WHERE u.email COLLATE NOCASE = ?
+						  AND u.is_del = ?
+						  AND u.status = ?
+						  AND a.is_del = ?
+						LIMIT 1
+					`).bind(
+						c.env.admin.trim(),
+						isDel.NORMAL,
+						userConst.status.NORMAL,
+						isDel.NORMAL
+					).first();
+				}
 			}
 		} catch (error) {
 			console.warn(`Unable to check database initialization status: ${error.message}`);
@@ -69,7 +91,9 @@ export async function getBootstrapStatus(c) {
 
 	return {
 		initialized,
+		adminCreated,
 		ready: initialized
+			&& adminCreated
 			&& bindings.d1
 			&& bindings.kv
 			&& configuration.domain
@@ -83,6 +107,7 @@ export async function getBootstrapStatus(c) {
 export function createBootstrapWebsiteConfig(status) {
 	return {
 		initialized: status.initialized,
+		adminCreated: status.adminCreated,
 		ready: status.ready,
 		bootstrap: status,
 		register: 1,

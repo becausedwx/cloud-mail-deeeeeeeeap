@@ -4,7 +4,7 @@ import attService from '../service/att-service';
 
 app.get('/oss/*', async (c) => {
 	const key = c.req.path.split('/oss/')[1];
-	if (await attService.isPubliclyProtectedKey(c, key)) {
+	if (!await attService.isPublicInlineKey(c, key)) {
 		return c.text('Not found', 404);
 	}
 	const obj = await r2Service.getObj(c, key);

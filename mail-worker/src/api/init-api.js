@@ -10,3 +10,7 @@ app.get('/init/status', async (c) => {
 app.post('/init', (c) => {
 	return dbInit.init(c);
 })
+
+app.post('/init/admin', (c) => {
+	return dbInit.createAdmin(c);
+});

@@ -14,6 +14,12 @@ const emailUtils = {
 		return parts.length === 2 ? parts[0] : '';
 	},
 
+	isSameAddress(left, right) {
+		return typeof left === 'string'
+			&& typeof right === 'string'
+			&& left.trim().toLowerCase() === right.trim().toLowerCase();
+	},
+
 	formatText(text) {
 		if (!text) return ''
 		return text

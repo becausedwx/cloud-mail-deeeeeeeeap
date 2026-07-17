@@ -39,7 +39,7 @@ export default {
 
 		 if (url.pathname.startsWith('/attachments/')) {
 			 const key = url.pathname.substring(1);
-			 if (await attService.isPubliclyProtectedKey({ env }, key)) {
+			 if (!await attService.isPublicInlineKey({ env }, key)) {
 				 return new Response('Not found', { status: 404 });
 			 }
 			 return await objectResponse({ env }, key);

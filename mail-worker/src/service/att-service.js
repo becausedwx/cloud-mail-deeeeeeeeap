@@ -39,7 +39,13 @@ const attService = {
 
 	async addAtt(c, attachments) {
 		const writtenKeys = new Set();
-		await orm(c).insert(att).values(attachments).run();
+		const attachmentRows = attachments.map(attachment => ({
+			...attachment,
+			type: attachment.type === attConst.type.EMBED
+				? attConst.type.EMBED
+				: attConst.type.ATT
+		}));
+		await orm(c).insert(att).values(attachmentRows).run();
 
 		for (let attachment of attachments) {
 			if (writtenKeys.has(attachment.key)) {
@@ -74,13 +80,13 @@ const attService = {
 		).all();
 	},
 
-	async isPubliclyProtectedKey(c, key) {
+	async isPublicInlineKey(c, key) {
 		if (!key || !key.startsWith(constant.ATTACHMENT_PREFIX)) {
 			return false;
 		}
 
 		if (!c.env?.db) {
-			return true;
+			return false;
 		}
 
 		try {
@@ -89,12 +95,11 @@ const attService = {
 				FROM attachments
 				WHERE key = ?
 				  AND type = ?
-				  AND (content_id IS NULL OR content_id = '')
 				LIMIT 1
-			`).bind(key, attConst.type.ATT).first();
+			`).bind(key, attConst.type.EMBED).first();
 			return !!row;
 		} catch (e) {
-			return true;
+			return false;
 		}
 	},
 
@@ -169,7 +174,7 @@ const attService = {
 		return response;
 	},
 
-	async toImageUrlHtml(c, content) {
+	async toImageUrlHtml(c, content, userId) {
 
 		const { r2Domain } = await settingService.query(c);
 
@@ -237,7 +242,7 @@ const attService = {
 
 		//查询已有内嵌url图片信息
 		const keys = [...new Set(imageDataList.filter(item => !item.content).map(item => item.key))];
-		const dbImageList  = await this.selectOneByKeys(c, keys);
+		const dbImageList  = await this.selectOneByKeys(c, keys, userId);
 
 		//设置给当前附件
 		await Promise.all(imageDataList.map(async image => {
@@ -398,13 +403,17 @@ const attService = {
 		await this.removeAttByField(c, "account_id", [accountId])
 	},
 
-	async selectOneByKeys(c, keys) {
-		if (!keys || keys.length === 0) {
+	async selectOneByKeys(c, keys, userId) {
+		const ownerId = Number(userId);
+		if (!keys || keys.length === 0 || !Number.isInteger(ownerId) || ownerId <= 0) {
 			return []
 		}
 		const rows = [];
 		for (const chunk of chunkArray(keys)) {
-			rows.push(...await orm(c).select().from(att).where(inArray(att.key, chunk)).orderBy(desc(att.attId)).groupBy(att.key).all());
+			rows.push(...await orm(c).select().from(att).where(and(
+				inArray(att.key, chunk),
+				eq(att.userId, ownerId)
+			)).orderBy(desc(att.attId)).groupBy(att.key).all());
 		}
 		return rows;
 	}

@@ -153,7 +153,7 @@ node ../scripts/cloudflare-workers-git-deploy.mjs
 - `CF_EMAIL` 填 `true` 时启用 Cloudflare Email 发信绑定
 - `CLOUD_MAIL_WRANGLER_VERSION` 可选，默认 `4.92.0`
 
-> Git 集成脚本只负责构建和部署，无法在 Worker 上线前初始化远程 D1。首次部署打开站点会进入 `/setup`，页面会检查绑定和变量，并给出使用 `POST /api/init` 的初始化命令。初始化密钥只放在请求头，不会由页面读取或保存。
+> Git 集成脚本只负责构建和部署，无法在 Worker 上线前初始化远程 D1。首次部署打开站点会进入 `/setup`，页面会检查绑定和变量，并依次给出 `POST /api/init`（初始化数据库）和 `POST /api/init/admin`（创建管理员）的命令。初始化密钥和管理员密码只由你在可信终端填写，页面不会读取或保存。
 
 `GET /api/init/status` 是公开的只读启动检查接口，只返回 D1、KV 和必需变量是否已配置等布尔状态，不返回资源 ID、变量内容或密钥。
 
@@ -186,13 +186,31 @@ cd mail-worker
 corepack pnpm wrangler deploy
 ```
 
-首次部署会进入 `/setup`。按页面提示使用 POST 初始化数据库（不要把 `jwt_secret` 放在 URL 里）：
+首次部署会进入 `/setup`。先把页面给出的 PowerShell 命令复制到可信终端初始化数据库。命令会隐藏询问 `jwt_secret`，不会把真实值写进命令历史：
 
-```bash
-curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域名/api/init
+```powershell
+$cloudMailInitSecret = [Net.NetworkCredential]::new('', (Read-Host 'Cloud Mail init secret' -AsSecureString)).Password
+try {
+  Invoke-RestMethod -Method Post -Uri 'https://你的域名/api/init' -Headers @{ 'X-Cloud-Mail-Init-Secret' = $cloudMailInitSecret }
+} finally {
+  Clear-Variable cloudMailInitSecret -ErrorAction SilentlyContinue
+}
 ```
 
-初始化完成后进入后台配置域名、管理员、Resend、公告、验证码识别等。
+数据库返回 `success` 后，再创建唯一的管理员账户。管理员邮箱取自 `admin` / `ADMIN` 环境变量；该接口只在管理员尚不存在时可用：
+
+```powershell
+$cloudMailInitSecret = [Net.NetworkCredential]::new('', (Read-Host 'Cloud Mail init secret' -AsSecureString)).Password
+$cloudMailAdminPassword = [Net.NetworkCredential]::new('', (Read-Host 'Cloud Mail administrator password' -AsSecureString)).Password
+try {
+  $cloudMailAdminBody = @{ password = $cloudMailAdminPassword } | ConvertTo-Json -Compress
+  Invoke-RestMethod -Method Post -Uri 'https://你的域名/api/init/admin' -Headers @{ 'X-Cloud-Mail-Init-Secret' = $cloudMailInitSecret } -ContentType 'application/json' -Body $cloudMailAdminBody
+} finally {
+  Clear-Variable cloudMailInitSecret, cloudMailAdminPassword, cloudMailAdminBody -ErrorAction SilentlyContinue
+}
+```
+
+密码长度为 6–30 位；PowerShell 会负责 JSON 转义，因此引号、反斜杠等合法字符不会破坏请求。创建完成后即可登录后台配置 Resend、公告、验证码识别等业务选项。公开注册、OAuth 绑定和公开导入接口都不能创建管理员。
 
 </details>
 
@@ -205,7 +223,7 @@ curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域�
 
 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`CUSTOM_DOMAIN`、`DOMAIN`、`ADMIN`、`JWT_SECRET`、`D1_DATABASE_NAME`、`D1_DATABASE_ID`、`KV_NAMESPACE_ID`，以及可选的 `R2_BUCKET_NAME`、`RESEND_WEBHOOK_SECRET`（推荐）、`RESEND_WEBHOOK_ALLOW_UNSIGNED`、`CORS_ORIGINS`。
 
-手动工作流执行后会完成：安装依赖 → 生成 `wrangler-action.toml` → 检查/填充 D1、KV 绑定 → 构建前端并部署 → 通过 `POST /api/init` 初始化数据库。
+手动工作流执行后会完成：安装依赖 → 生成 `wrangler-action.toml` → 检查/填充 D1、KV 绑定 → 构建前端并部署 → 通过 `POST /api/init` 初始化数据库。管理员账户仍需按 `/setup` 提示通过 `POST /api/init/admin` 创建，工作流不会接收或记录管理员密码。
 
 </details>
 
@@ -214,10 +232,11 @@ curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域�
 1. 构建日志中没有 `Framework: Static` / `Output Directory: mail-vue` / `Create wrangler.jsonc` 等误识别提示。
 2. Wrangler 输出的绑定里能看到 `env.db`、`env.kv`、`env.assets`。
 3. 打开 `/setup`，确认 D1、KV、`domain`、`admin`、`jwt_secret` 均显示已就绪。
-4. 按 `/setup` 提示执行 `curl -X POST -H "X-Cloud-Mail-Init-Secret: 你的 jwt_secret" https://你的域名/api/init`，返回 `success` 后点击「重新检测」。
-5. 登录后台 → 维护中心，检查 D1 / KV / R2 / AI / 发信绑定状态。
-6. 如提示缺字段、缺索引或缺搜索表，按顺序执行「补齐数据库结构」「补齐索引」「重建搜索表」。
-7. 进入系统设置，配置域名、管理员、Resend、公告、验证码识别等业务选项。
+4. 按 `/setup` 提示执行隐藏输入凭据的 PowerShell 初始化命令，返回 `success` 后点击「重新检测」。
+5. 页面显示数据库已就绪后，按提示调用 `POST /api/init/admin`，在请求 JSON 中设置 6–30 位管理员密码；返回 `success` 后再次检测。
+6. 使用 `admin` / `ADMIN` 中配置的邮箱和刚设置的密码登录后台 → 维护中心，检查 D1 / KV / R2 / AI / 发信绑定状态。
+7. 如提示缺字段、缺索引或缺搜索表，按顺序执行「补齐数据库结构」「补齐索引」「重建搜索表」。
+8. 进入系统设置，配置 Resend、公告、验证码识别等业务选项。
 
 <details>
 <summary><b>从旧 Cloudflare 项目切到本仓库</b></summary>

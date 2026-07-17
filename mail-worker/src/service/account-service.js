@@ -17,10 +17,12 @@ import { chunkArray } from '../utils/sql-utils';
 const accountService = {
 
 	async add(c, params, userId) {
+		let { email, token } = params;
+		if (emailUtils.isSameAddress(email, c.env.admin)) {
+			throw new BizError('Administrator account must be created through the initialization flow', 403);
+		}
 
 		const { addEmailVerify , addEmail, manyEmail, addVerifyCount, minEmailPrefix, emailPrefixFilter } = await settingService.query(c);
-
-		let { email, token } = params;
 
 
 		if (!(addEmail === settingConst.addEmail.OPEN && manyEmail === settingConst.manyEmail.OPEN)) {
@@ -61,7 +63,7 @@ const accountService = {
 		const userRow = await userService.selectById(c, userId);
 		const roleRow = await roleService.selectById(c, userRow.type);
 
-		if (userRow.email !== c.env.admin) {
+		if (!emailUtils.isSameAddress(userRow.email, c.env.admin)) {
 
 			if (roleRow.accountCount > 0) {
 				const userAccountCount = await accountService.countUserAccount(c, userId)
@@ -148,7 +150,7 @@ const accountService = {
 		const user = await userService.selectById(c, userId);
 		const accountRow = await this.selectById(c, accountId);
 
-		if (accountRow.email === user.email) {
+		if (emailUtils.isSameAddress(accountRow.email, user.email)) {
 			throw new BizError(t('delMyAccount'));
 		}
 
@@ -167,6 +169,10 @@ const accountService = {
 			and(eq(account.accountId, accountId),
 				eq(account.isDel, isDel.NORMAL)))
 			.get();
+	},
+
+	selectByIdIncludeDel(c, accountId) {
+		return orm(c).select().from(account).where(eq(account.accountId, accountId)).get();
 	},
 
 	async insert(c, params) {
@@ -245,6 +251,10 @@ const accountService = {
 
 	async physicsDelete(c, params) {
 		const { accountId } = params
+		const accountRow = await this.selectByIdIncludeDel(c, accountId);
+		if (accountRow && emailUtils.isSameAddress(accountRow.email, c.env.admin)) {
+			throw new BizError('The current administrator account cannot be deleted', 403);
+		}
 		await emailService.physicsDeleteByAccountId(c, accountId)
 		await orm(c).delete(account).where(eq(account.accountId, accountId)).run();
 	},

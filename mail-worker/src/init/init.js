@@ -3,6 +3,8 @@ import emailUtils from '../utils/email-utils';
 import {emailConst} from "../const/entity-const";
 import secretUtils from '../utils/secret-utils';
 import { EMAIL_SEARCH_BODY_LIMIT } from '../service/email-search-service';
+import BizError from '../error/biz-error';
+import cryptoUtils from '../utils/crypto-utils';
 
 export const INIT_SECRET_HEADER = 'X-Cloud-Mail-Init-Secret';
 
@@ -35,6 +37,86 @@ const dbInit = {
 		await this.v3_0DB(c);
 		await this.v3_1DB(c);
 		await settingService.refresh(c);
+		return c.text('success');
+	},
+
+	async createAdmin(c, params) {
+		const secret = c.req.header(INIT_SECRET_HEADER);
+		if (!await secretUtils.timingSafeEqual(secret, c.env.jwt_secret)) {
+			return c.text('JWT secret mismatch', 401);
+		}
+		if (params === undefined) {
+			params = await c.req.json();
+		}
+
+		const password = params?.password;
+		if (typeof password !== 'string' || password.length < 6 || password.length > 30) {
+			throw new BizError('Administrator password must contain between 6 and 30 characters', 400);
+		}
+
+		const adminEmail = typeof c.env.admin === 'string' ? c.env.admin.trim() : '';
+		if (!emailUtils.getName(adminEmail) || !emailUtils.getDomain(adminEmail)) {
+			throw new BizError('Administrator email is not configured correctly', 400);
+		}
+
+		const existingAdmin = await c.env.db.prepare(`
+			SELECT user_id
+			FROM user
+			WHERE email COLLATE NOCASE = ?
+			LIMIT 1
+		`).bind(adminEmail).first();
+		if (existingAdmin) {
+			throw new BizError('Administrator account already exists', 409);
+		}
+
+		const defaultRole = await c.env.db.prepare(`
+			SELECT role_id AS roleId
+			FROM role
+			WHERE is_default = 1
+			ORDER BY role_id
+			LIMIT 1
+		`).first();
+		if (!defaultRole) {
+			throw new BizError('Default role is not initialized', 409);
+		}
+
+		const { salt, hash } = await cryptoUtils.hashPassword(password);
+		const [userInsertResult, accountInsertResult] = await c.env.db.batch([
+			c.env.db.prepare(`
+				INSERT INTO user (email, type, password, salt)
+				SELECT ?, ?, ?, ?
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM user
+					WHERE email COLLATE NOCASE = ?
+				)
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM account
+					WHERE email COLLATE NOCASE = ?
+				  )
+			`).bind(adminEmail, defaultRole.roleId, hash, salt, adminEmail, adminEmail),
+			c.env.db.prepare(`
+				INSERT INTO account (email, name, user_id)
+				SELECT ?, ?, user_id
+				FROM user
+				WHERE email COLLATE NOCASE = ?
+				  AND password = ?
+				  AND salt = ?
+				  AND NOT EXISTS (
+					SELECT 1
+					FROM account
+					WHERE email COLLATE NOCASE = ?
+				  )
+				ORDER BY user_id DESC
+				LIMIT 1
+			`).bind(adminEmail, emailUtils.getName(adminEmail), adminEmail, hash, salt, adminEmail)
+		]);
+		if (Number(userInsertResult?.meta?.changes || 0) !== 1
+			|| Number(accountInsertResult?.meta?.changes || 0) !== 1) {
+			throw new BizError('Administrator account already exists', 409);
+		}
+
 		return c.text('success');
 	},
 

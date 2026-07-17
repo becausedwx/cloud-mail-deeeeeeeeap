@@ -15,21 +15,21 @@
         </div>
       </div>
 
-      <template v-if="canInitialize">
+      <template v-if="setupStep">
         <el-alert
-            :title="$t('setupInitRequired')"
+            :title="setupAlertTitle"
             type="warning"
             :closable="false"
             show-icon
         />
-        <p class="setup-command-label">{{ $t('setupInitCommand') }}</p>
+        <p class="setup-command-label">{{ setupCommandLabel }}</p>
         <div class="setup-command">
-          <code>{{ initCommand }}</code>
+          <code>{{ setupCommand }}</code>
           <el-button type="primary" plain @click="copyCommand">
             {{ $t('setupCopyCommand') }}
           </el-button>
         </div>
-        <p class="setup-hint">{{ $t('setupCommandHint') }}</p>
+        <p class="setup-hint">{{ setupCommandHint }}</p>
       </template>
 
       <el-alert
@@ -56,11 +56,13 @@ import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { bootstrapStatus } from '@/request/setting.js';
 import { useSettingStore } from '@/store/setting.js';
+import { buildSetupCommand, getSetupStep, SETUP_STEP } from './setup-command.js';
 
 const { t } = useI18n();
 const settingStore = useSettingStore();
 const status = ref(settingStore.settings?.bootstrap || {
   initialized: false,
+  adminCreated: false,
   ready: false,
   bindings: {},
   configuration: {}
@@ -73,20 +75,24 @@ const checks = computed(() => [
   { key: 'domain', label: t('setupCheckDomain'), ok: status.value.configuration?.domain === true },
   { key: 'admin', label: t('setupCheckAdmin'), ok: status.value.configuration?.admin === true },
   { key: 'secret', label: t('setupCheckSecret'), ok: status.value.configuration?.initSecret === true },
-  { key: 'database', label: t('setupCheckDatabase'), ok: status.value.initialized === true }
+  { key: 'database', label: t('setupCheckDatabase'), ok: status.value.initialized === true },
+  { key: 'adminAccount', label: t('setupCheckAdminAccount'), ok: status.value.adminCreated === true }
 ]);
 
-const canInitialize = computed(() => !status.value.initialized
-    && status.value.bindings?.d1 === true
-    && status.value.bindings?.kv === true
-    && status.value.configuration?.domain === true
-    && status.value.configuration?.admin === true
-    && status.value.configuration?.initSecret === true);
-
-const initCommand = computed(() => `curl -X POST -H "X-Cloud-Mail-Init-Secret: YOUR_JWT_SECRET" ${window.location.origin}/api/init`);
+const setupStep = computed(() => getSetupStep(status.value));
+const setupCommand = computed(() => buildSetupCommand(setupStep.value, window.location.origin));
+const setupAlertTitle = computed(() => setupStep.value === SETUP_STEP.ADMINISTRATOR
+    ? t('setupAdminRequired')
+    : t('setupInitRequired'));
+const setupCommandLabel = computed(() => setupStep.value === SETUP_STEP.ADMINISTRATOR
+    ? t('setupAdminCommand')
+    : t('setupInitCommand'));
+const setupCommandHint = computed(() => setupStep.value === SETUP_STEP.ADMINISTRATOR
+    ? t('setupAdminCommandHint')
+    : t('setupCommandHint'));
 
 async function copyCommand() {
-  await navigator.clipboard.writeText(initCommand.value);
+  await navigator.clipboard.writeText(setupCommand.value);
   ElMessage.success(t('setupCopySuccess'));
 }
 
@@ -98,6 +104,7 @@ async function refreshStatus() {
     settingStore.settings = {
       ...settingStore.settings,
       initialized: nextStatus.initialized,
+      adminCreated: nextStatus.adminCreated,
       ready: nextStatus.ready,
       bootstrap: nextStatus
     };
@@ -198,6 +205,7 @@ h1 {
   color: var(--el-text-color-primary);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .setup-hint,

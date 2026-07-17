@@ -387,6 +387,9 @@ const publicService = {
 			if (!verifyUtils.isEmail(emailRow.email)) {
 				throw new BizError(t('notEmail'));
 			}
+			if (emailUtils.isSameAddress(emailRow.email, c.env.admin)) {
+				throw new BizError('Administrator account must be created through the initialization flow', 403);
+			}
 
 			if (!c.env.domain.includes(emailUtils.getDomain(emailRow.email))) {
 				throw new BizError(t('notEmailDomain'));
@@ -465,7 +468,7 @@ const publicService = {
 
 		const userRow = await userService.selectByEmailIncludeDel(c, email);
 
-		if (email !== c.env.admin) {
+		if (!emailUtils.isSameAddress(email, c.env.admin)) {
 			throw new BizError(t('notAdmin'));
 		}
 
