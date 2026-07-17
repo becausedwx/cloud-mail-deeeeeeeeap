@@ -200,6 +200,69 @@ describe('Resend webhook processing', () => {
 		});
 	});
 
+	it('returns a retryable error while an identical fresh event is still PROCESSING', async () => {
+		const rawBody = JSON.stringify({
+			type: 'email.delivered',
+			data: { email_id: 'resend-message-in-progress' }
+		});
+		const bodySha256 = await resendService.sha256Hex(rawBody);
+		await env.db.prepare(`
+			INSERT INTO resend_webhook_event (
+				event_key, body_sha256, event_type, provider_email_id, status
+			) VALUES (?, ?, 'email.delivered', 'resend-message-in-progress', 'PROCESSING')
+		`).bind(`body:${bodySha256}`, bodySha256).run();
+
+		await expect(resendService.webhooks(unsignedContext(), rawBody)).rejects.toMatchObject({
+			code: 503
+		});
+		expect(emailService.transitionExternalEmailStatus).not.toHaveBeenCalled();
+	});
+
+	it('returns a retryable error when another request wins a RETRY claim', async () => {
+		const c = {
+			env: {
+				db: {
+					prepare(sql) {
+						return {
+							bind() {
+								return this;
+							},
+							async first() {
+								if (sql.includes('SELECT body_sha256 AS bodySha256')) {
+									return { bodySha256: 'retry-hash', status: 'RETRY' };
+								}
+								return null;
+							}
+						};
+					}
+				}
+			}
+		};
+
+		await expect(resendService.claimEvent(c, {
+			eventKey: 'body:retry-hash',
+			svixId: null,
+			bodySha256: 'retry-hash',
+			eventType: 'email.delivered',
+			providerEmailId: 'resend-message-retry-race'
+		})).rejects.toMatchObject({ code: 503 });
+	});
+
+	it('does not acknowledge an event when finishEvent cannot persist PROCESSED', async () => {
+		await env.db.prepare(`
+			INSERT INTO resend_webhook_event (
+				event_key, body_sha256, event_type, status, outcome
+			) VALUES ('body:finish-race', 'finish-race', 'email.delivered', 'RETRY', 'RETRY_PENDING')
+		`).run();
+
+		await expect(resendService.finishEvent(
+			{ env },
+			'body:finish-race',
+			'finish-race',
+			'UPDATED'
+		)).rejects.toMatchObject({ code: 503 });
+	});
+
 	it('creates the webhook event schema idempotently', async () => {
 		await env.db.prepare('DROP TABLE resend_webhook_event').run();
 
@@ -216,6 +279,7 @@ describe('Resend webhook processing', () => {
 		`).all();
 		expect(table?.name).toBe('resend_webhook_event');
 		expect(indexes.results.map(row => row.name)).toEqual(expect.arrayContaining([
+			'idx_resend_webhook_event_key',
 			'idx_resend_webhook_event_status_time',
 			'idx_resend_webhook_event_provider_email'
 		]));
@@ -225,7 +289,7 @@ describe('Resend webhook processing', () => {
 		await env.db.prepare('DROP TABLE resend_webhook_event').run();
 		await env.db.prepare(`
 			CREATE TABLE resend_webhook_event (
-				event_key TEXT PRIMARY KEY
+				event_key TEXT
 			)
 		`).run();
 
@@ -244,6 +308,23 @@ describe('Resend webhook processing', () => {
 			'received_at',
 			'processed_at'
 		]));
+		const indexes = await env.db.prepare(`
+			PRAGMA index_list(resend_webhook_event)
+		`).all();
+		expect(indexes.results).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				name: 'idx_resend_webhook_event_key',
+				unique: 1
+			})
+		]));
+
+		await resendService.webhooks(unsignedContext(), JSON.stringify({
+			type: 'email.opened',
+			data: { email_id: 'resend-message-repaired-schema' }
+		}));
+		expect((await env.db.prepare(`
+			SELECT received_at AS receivedAt FROM resend_webhook_event
+		`).first()).receivedAt).toEqual(expect.any(String));
 	});
 
 	it('preserves the strongest concurrent audit outcome', async () => {

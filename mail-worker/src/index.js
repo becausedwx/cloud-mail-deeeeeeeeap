@@ -56,8 +56,8 @@ export default {
 	email: email,
 	async scheduled(c, env, ctx) {
 		if (c.cron === '*/30 * * * *') {
-			await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }))
-			await runScheduledTask('delivery-attempt-reconcile', () => deliveryAttemptService.reconcile({ env }))
+			await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }, { limit: 1 }))
+			await runScheduledTask('delivery-attempt-reconcile', () => deliveryAttemptService.reconcile({ env }, { limit: 2 }))
 			await runScheduledTask('clear-expired-auth-failures', () => authRateLimitService.clearExpired({ env }))
 			await runScheduledTask('clear-expired-oauth-security', () => oauthService.clearExpiredOAuthSecurity({ env }))
 			await runScheduledTask('analysis-cache', () => analysisService.refreshEchartsCache({ env }))
@@ -66,8 +66,8 @@ export default {
 
 		await runScheduledTask('verify-record-clear', () => verifyRecordService.clearRecord({ env }))
 		await runScheduledTask('reset-day-send-count', () => userService.resetDaySendCount({ env }))
-		await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }))
-		await runScheduledTask('delivery-attempt-reconcile', () => deliveryAttemptService.reconcile({ env }))
+		await runScheduledTask('complete-receive-all', () => emailService.completeReceiveAll({ env }, { limit: 1 }))
+		await runScheduledTask('delivery-attempt-reconcile', () => deliveryAttemptService.reconcile({ env }, { limit: 2 }))
 		await runScheduledTask('clear-unbound-oauth-users', () => oauthService.clearNoBindOathUser({ env }))
 		await runScheduledTask('clear-expired-auth-failures', () => authRateLimitService.clearExpired({ env }))
 		if (isEnabled(env.code_clear_stale_cron)) {

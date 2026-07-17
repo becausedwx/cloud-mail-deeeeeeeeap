@@ -98,6 +98,35 @@ async function insertStaleIncoming({ attachmentCount = 1, accountId = 10 } = {})
 	return row.emailId;
 }
 
+function createCountingDb(db) {
+	const counter = { queries: 0 };
+	const wrapStatement = statement => ({
+		bind(...values) {
+			return wrapStatement(statement.bind(...values));
+		},
+		async all() {
+			counter.queries += 1;
+			return await statement.all();
+		},
+		async first() {
+			counter.queries += 1;
+			return await statement.first();
+		},
+		async run() {
+			counter.queries += 1;
+			return await statement.run();
+		}
+	});
+	return {
+		counter,
+		db: {
+			prepare(sql) {
+				return wrapStatement(db.prepare(sql));
+			}
+		}
+	};
+}
+
 describe('incoming attachment recovery', () => {
 	beforeEach(async () => {
 		vi.clearAllMocks();
@@ -144,7 +173,7 @@ describe('incoming attachment recovery', () => {
 		);
 	});
 
-	it('requires two missing checks before failing a KV-backed attachment', async () => {
+	it('requires a delayed second missing check before failing a KV-backed attachment', async () => {
 		const emailId = await insertStaleIncoming();
 		await env.db.prepare(`
 			INSERT INTO attachments (
@@ -157,14 +186,16 @@ describe('incoming attachment recovery', () => {
 		await emailService.completeReceiveAll({ env });
 
 		const firstEmailRow = await env.db.prepare(`
-			SELECT status, is_del AS isDel FROM email WHERE email_id = ?
+			SELECT status, is_del AS isDel, recovery_after AS recoveryAfter
+			FROM email WHERE email_id = ?
 		`).bind(emailId).first();
 		const firstAttachmentRow = await env.db.prepare(`
 			SELECT status, message FROM attachments WHERE email_id = ?
 		`).bind(emailId).first();
 		expect(firstEmailRow).toEqual({
 			status: emailConst.status.SAVING,
-			isDel: isDel.DELETE
+			isDel: isDel.DELETE,
+			recoveryAfter: expect.any(String)
 		});
 		expect(firstAttachmentRow).toEqual({
 			status: attConst.status.PENDING,
@@ -180,12 +211,64 @@ describe('incoming attachment recovery', () => {
 			SELECT status, message FROM attachments WHERE email_id = ?
 		`).bind(emailId).first();
 		expect(secondEmailRow).toEqual({
-			status: emailConst.status.FAILED,
+			status: emailConst.status.SAVING,
 			isDel: isDel.DELETE
 		});
 		expect(secondAttachmentRow).toEqual({
+			status: attConst.status.PENDING,
+			message: 'OBJECT_MISSING_RECHECK'
+		});
+
+		await env.db.prepare(`
+			UPDATE email SET recovery_after = datetime('now', '-1 minute')
+			WHERE email_id = ?
+		`).bind(emailId).run();
+		await emailService.completeReceiveAll({ env });
+
+		const finalEmailRow = await env.db.prepare(`
+			SELECT status, is_del AS isDel FROM email WHERE email_id = ?
+		`).bind(emailId).first();
+		const finalAttachmentRow = await env.db.prepare(`
+			SELECT status, message FROM attachments WHERE email_id = ?
+		`).bind(emailId).first();
+		expect(finalEmailRow).toEqual({
+			status: emailConst.status.FAILED,
+			isDel: isDel.DELETE
+		});
+		expect(finalAttachmentRow).toEqual({
 			status: attConst.status.FAILED,
 			message: 'OBJECT_MISSING'
+		});
+	});
+
+	it('lets only one recovery runner inspect an email when cron invocations overlap', async () => {
+		const emailId = await insertStaleIncoming();
+		await env.db.prepare(`
+			INSERT INTO attachments (
+				user_id, email_id, account_id, key, filename, status, type
+			) VALUES (7, ?, 10, 'attachments/kv-overlap.pdf', 'kv-overlap.pdf', ?, ?)
+		`).bind(emailId, attConst.status.PENDING, attConst.type.ATT).run();
+		r2Service.storageType.mockResolvedValue('KV');
+		r2Service.exists.mockResolvedValue(false);
+
+		await Promise.all([
+			emailService.completeReceiveAll({ env }),
+			emailService.completeReceiveAll({ env })
+		]);
+
+		expect(r2Service.exists).toHaveBeenCalledOnce();
+		expect(await env.db.prepare(`
+			SELECT status, recovery_after AS recoveryAfter
+			FROM email WHERE email_id = ?
+		`).bind(emailId).first()).toEqual({
+			status: emailConst.status.SAVING,
+			recoveryAfter: expect.any(String)
+		});
+		expect(await env.db.prepare(`
+			SELECT status, message FROM attachments WHERE email_id = ?
+		`).bind(emailId).first()).toEqual({
+			status: attConst.status.PENDING,
+			message: 'OBJECT_MISSING_RECHECK'
 		});
 	});
 
@@ -278,9 +361,9 @@ describe('incoming attachment recovery', () => {
 		expect(r2Service.exists).not.toHaveBeenCalled();
 	});
 
-	it('processes at most four stale emails per recovery invocation', async () => {
+	it('processes at most two stale emails per recovery invocation', async () => {
 		const emailIds = [];
-		for (let index = 0; index < 5; index += 1) {
+		for (let index = 0; index < 3; index += 1) {
 			emailIds.push(await insertStaleIncoming({ attachmentCount: 0 }));
 		}
 
@@ -291,13 +374,13 @@ describe('incoming attachment recovery', () => {
 			FROM email
 			ORDER BY email_id
 		`).all();
-		expect(rows.results.slice(0, 4)).toEqual(emailIds.slice(0, 4).map(emailId => ({
+		expect(rows.results.slice(0, 2)).toEqual(emailIds.slice(0, 2).map(emailId => ({
 			emailId,
 			status: emailConst.status.RECEIVE,
 			isDel: isDel.NORMAL
 		})));
-		expect(rows.results[4]).toEqual({
-			emailId: emailIds[4],
+		expect(rows.results[2]).toEqual({
+			emailId: emailIds[2],
 			status: emailConst.status.SAVING,
 			isDel: isDel.DELETE
 		});
@@ -305,7 +388,7 @@ describe('incoming attachment recovery', () => {
 
 	it('defers transiently failing candidates so later emails are not starved', async () => {
 		const blockedEmailIds = [];
-		for (let index = 0; index < 4; index += 1) {
+		for (let index = 0; index < 2; index += 1) {
 			const emailId = await insertStaleIncoming();
 			blockedEmailIds.push(emailId);
 			await env.db.prepare(`
@@ -329,7 +412,7 @@ describe('incoming attachment recovery', () => {
 		const blockedRows = await env.db.prepare(`
 			SELECT email_id AS emailId, status, recovery_after AS recoveryAfter
 			FROM email
-			WHERE email_id IN (?, ?, ?, ?)
+			WHERE email_id IN (?, ?)
 			ORDER BY email_id
 		`).bind(...blockedEmailIds).all();
 		const laterRow = await env.db.prepare(`
@@ -427,6 +510,27 @@ describe('incoming attachment recovery', () => {
 				isDel: isDel.NORMAL
 			}
 		]);
+	});
+
+	it('honors the per-invocation incoming recovery limit', async () => {
+		const emailIds = [];
+		for (let index = 0; index < 3; index += 1) {
+			emailIds.push(await insertStaleIncoming({ attachmentCount: 0 }));
+		}
+
+		await emailService.completeReceiveAll({ env }, { limit: 1 });
+
+		const rows = await env.db.prepare(`
+			SELECT status, COUNT(*) AS total
+			FROM email
+			WHERE email_id IN (?, ?, ?)
+			GROUP BY status
+			ORDER BY status
+		`).bind(...emailIds).all();
+		expect(rows.results).toEqual(expect.arrayContaining([
+			{ status: emailConst.status.RECEIVE, total: 1 },
+			{ status: emailConst.status.SAVING, total: 2 }
+		]));
 	});
 
 	it('keeps the email saving when object storage is temporarily unavailable', async () => {
@@ -545,6 +649,39 @@ describe('incoming attachment recovery', () => {
 			message: 'ATTACHMENT_RECOVERY_LIMIT_EXCEEDED'
 		});
 		expect(r2Service.exists).not.toHaveBeenCalled();
+	});
+
+	it('recovers ten stored attachments with a bounded number of D1 queries', async () => {
+		const emailId = await insertStaleIncoming({ attachmentCount: 10 });
+		await env.db.prepare(`
+			WITH RECURSIVE seq(value) AS (
+				SELECT 1
+				UNION ALL
+				SELECT value + 1 FROM seq WHERE value < 10
+			)
+			INSERT INTO attachments (
+				user_id, email_id, account_id, key, filename, status, type
+			)
+			SELECT
+				7,
+				?,
+				10,
+				'attachments/budget-' || value || '.pdf',
+				'budget-' || value || '.pdf',
+				?,
+				?
+			FROM seq
+		`).bind(emailId, attConst.status.PENDING, attConst.type.ATT).run();
+		r2Service.exists.mockResolvedValue(true);
+		const counted = createCountingDb(env.db);
+
+		const summary = await attService.reconcileReceived({
+			env: { db: counted.db }
+		}, emailId);
+
+		expect(summary).toMatchObject({ total: 10, ready: 10, pending: 0, failed: 0 });
+		expect(r2Service.exists).toHaveBeenCalledTimes(10);
+		expect(counted.counter.queries).toBeLessThanOrEqual(3);
 	});
 
 	it('lists only ready normal attachments while preserving historical status zero rows', async () => {

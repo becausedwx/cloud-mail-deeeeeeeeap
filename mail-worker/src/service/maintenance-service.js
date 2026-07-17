@@ -85,10 +85,18 @@ const EXPECTED_INDEXES = [
 	'idx_delivery_attempt_status_time',
 	'idx_delivery_attempt_email',
 	'idx_delivery_attempt_provider_message',
+	'idx_resend_webhook_event_key',
 	'idx_resend_webhook_event_status_time',
 	'idx_resend_webhook_event_provider_email',
 	'idx_email_type_create_time',
 	'idx_user_create_time'
+];
+
+const EXPECTED_UNIQUE_INDEXES = [
+	'idx_delivery_attempt_key',
+	'idx_delivery_attempt_email',
+	'idx_delivery_attempt_provider_message',
+	'idx_resend_webhook_event_key'
 ];
 
 const INDEX_SQL_LIST = [
@@ -112,8 +120,9 @@ const INDEX_SQL_LIST = [
 	`CREATE INDEX IF NOT EXISTS idx_attachments_email_status_key ON attachments(email_id, status, key);`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_key ON delivery_attempt(attempt_key);`,
 	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_status_time ON delivery_attempt(status, update_time, attempt_id);`,
-	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_email ON delivery_attempt(email_id, attempt_id);`,
-	`CREATE INDEX IF NOT EXISTS idx_delivery_attempt_provider_message ON delivery_attempt(provider, provider_message_id, attempt_id);`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_email ON delivery_attempt(email_id);`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_provider_message ON delivery_attempt(provider, provider_message_id) WHERE provider_message_id IS NOT NULL AND provider_message_id <> '';`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_resend_webhook_event_key ON resend_webhook_event(event_key);`,
 	`CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_status_time ON resend_webhook_event(status, received_at, event_key);`,
 	`CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_provider_email ON resend_webhook_event(provider_email_id, received_at);`,
 	`CREATE INDEX IF NOT EXISTS idx_email_type_create_time ON email(type, create_time);`,
@@ -155,6 +164,10 @@ function normalizeStaleMinutes(value) {
 
 function isMissingTable(error, tableName) {
 	return new RegExp(`no such table: ${tableName}`, 'i').test(error?.message || '');
+}
+
+function isMissingColumn(error) {
+	return /no such column:/i.test(error?.message || '');
 }
 
 
@@ -219,6 +232,8 @@ const maintenanceService = {
 				deliveryAttemptColumnRows,
 				resendWebhookEventColumnRows,
 				indexRows,
+				deliveryAttemptIndexRows,
+				resendWebhookEventIndexRows,
 				searchTable,
 				deliveryAttemptTable,
 				resendWebhookEventTable,
@@ -232,6 +247,8 @@ const maintenanceService = {
 				c.env.db.prepare(`PRAGMA table_info(delivery_attempt)`).all(),
 				c.env.db.prepare(`PRAGMA table_info(resend_webhook_event)`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index'`).all(),
+				c.env.db.prepare(`PRAGMA index_list(delivery_attempt)`).all(),
+				c.env.db.prepare(`PRAGMA index_list(resend_webhook_event)`).all(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'email_search'`).first(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'delivery_attempt'`).first(),
 				c.env.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'resend_webhook_event'`).first(),
@@ -261,7 +278,7 @@ const maintenanceService = {
 					throw error;
 				}),
 				deliveryAttemptService.health(c).catch(error => {
-					if (isMissingTable(error, 'delivery_attempt')) {
+					if (isMissingTable(error, 'delivery_attempt') || isMissingColumn(error)) {
 						return { total: 0, unresolved: 0, counts: {} };
 					}
 					throw error;
@@ -283,7 +300,16 @@ const maintenanceService = {
 			details.missingResendWebhookEventColumns = EXPECTED_RESEND_WEBHOOK_EVENT_COLUMNS
 				.filter(name => !details.resendWebhookEventColumns.includes(name));
 			details.indexes = (indexRows.results || []).map(row => row.name);
-			details.missingIndexes = EXPECTED_INDEXES.filter(name => !details.indexes.includes(name));
+			const uniqueIndexNames = new Set([
+				...(deliveryAttemptIndexRows.results || []),
+				...(resendWebhookEventIndexRows.results || [])
+			].filter(row => Number(row.unique) === 1).map(row => row.name));
+			details.missingIndexes = [...new Set([
+				...EXPECTED_INDEXES.filter(name => !details.indexes.includes(name)),
+				...EXPECTED_UNIQUE_INDEXES.filter(name => (
+					details.indexes.includes(name) && !uniqueIndexNames.has(name)
+				))
+			])];
 			details.emailTotal = emailCount.total;
 			details.emailSearchTable = !!searchTable;
 			details.deliveryAttemptTable = !!deliveryAttemptTable;

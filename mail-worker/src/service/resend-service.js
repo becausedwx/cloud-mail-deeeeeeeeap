@@ -180,8 +180,9 @@ const resendService = {
 				body_sha256,
 				event_type,
 				provider_email_id,
-				status
-			) VALUES (?, ?, ?, ?, ?, ?)
+				status,
+				received_at
+			) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 			ON CONFLICT(event_key) DO NOTHING
 			RETURNING event_key AS eventKey
 		`).bind(
@@ -220,7 +221,10 @@ const resendService = {
 				event.bodySha256,
 				WEBHOOK_EVENT_STATUS.RETRY
 			).first();
-			return { duplicate: !acquired };
+			if (acquired) {
+				return { duplicate: false };
+			}
+			throw new BizError('Webhook event is still processing', 503);
 		}
 		if (existing.status === WEBHOOK_EVENT_STATUS.PROCESSING) {
 			const acquired = await c.env.db.prepare(`
@@ -236,7 +240,10 @@ const resendService = {
 				event.bodySha256,
 				WEBHOOK_EVENT_STATUS.PROCESSING
 			).first();
-			return { duplicate: !acquired };
+			if (acquired) {
+				return { duplicate: false };
+			}
+			throw new BizError('Webhook event is still processing', 503);
 		}
 		return { duplicate: true };
 	},
@@ -256,7 +263,7 @@ const resendService = {
 	},
 
 	async finishEvent(c, eventKey, bodySha256, outcome) {
-		await c.env.db.prepare(`
+		const finished = await c.env.db.prepare(`
 			UPDATE resend_webhook_event
 			SET status = ?,
 				outcome = CASE
@@ -267,6 +274,7 @@ const resendService = {
 			WHERE event_key = ?
 			  AND body_sha256 = ?
 			  AND status IN (?, ?)
+			RETURNING event_key AS eventKey
 		`).bind(
 			WEBHOOK_EVENT_STATUS.PROCESSED,
 			outcome,
@@ -275,7 +283,20 @@ const resendService = {
 			bodySha256,
 			WEBHOOK_EVENT_STATUS.PROCESSING,
 			WEBHOOK_EVENT_STATUS.PROCESSED
-		).run();
+		).first();
+		if (finished) {
+			return;
+		}
+		const existing = await c.env.db.prepare(`
+			SELECT body_sha256 AS bodySha256, status
+			FROM resend_webhook_event
+			WHERE event_key = ?
+		`).bind(eventKey).first();
+		if (existing?.bodySha256 === bodySha256
+			&& existing.status === WEBHOOK_EVENT_STATUS.PROCESSED) {
+			return;
+		}
+		throw new BizError('Unable to finalize webhook event', 503);
 	},
 
 	async sha256Hex(value) {

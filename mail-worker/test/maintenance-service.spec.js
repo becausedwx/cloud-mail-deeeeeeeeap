@@ -218,6 +218,96 @@ describe('maintenance service', () => {
 		expect(result.details.missingResendWebhookEventColumns).toContain('status');
 	});
 
+	it('keeps maintenance health usable when delivery_attempt exists but is missing columns', async () => {
+		deliveryAttemptService.health.mockRejectedValue(new Error('no such column: status'));
+		const c = {
+			env: {
+				db: {
+					prepare(sql) {
+						return {
+							bind() {
+								return this;
+							},
+							async all() {
+								if (sql.includes('PRAGMA table_info(delivery_attempt)')) {
+									return { results: [{ name: 'attempt_id' }] };
+								}
+								return { results: [] };
+							},
+							async first() {
+								if (sql.includes("name = 'delivery_attempt'")) {
+									return { name: 'delivery_attempt' };
+								}
+								return sql.includes('COUNT(*)') ? { total: 0 } : null;
+							}
+						};
+					}
+				}
+			}
+		};
+
+		const result = await maintenanceService.health(c);
+
+		expect(result.checks.find(item => item.key === 'schema').ok).toBe(false);
+		expect(result.details.deliveryAttempts).toEqual({
+			total: 0,
+			unresolved: 0,
+			counts: {}
+		});
+	});
+
+	it('reports named durable identity indexes as missing when they are not unique', async () => {
+		const c = {
+			env: {
+				db: {
+					prepare(sql) {
+						return {
+							bind() {
+								return this;
+							},
+							async all() {
+								if (sql.includes("type = 'index'")) {
+									return {
+										results: [
+											{ name: 'idx_delivery_attempt_email' },
+											{ name: 'idx_delivery_attempt_provider_message' },
+											{ name: 'idx_resend_webhook_event_key' }
+										]
+									};
+								}
+								if (sql.includes('PRAGMA index_list(delivery_attempt)')) {
+									return {
+										results: [
+											{ name: 'idx_delivery_attempt_email', unique: 0 },
+											{ name: 'idx_delivery_attempt_provider_message', unique: 0 }
+										]
+									};
+								}
+								if (sql.includes('PRAGMA index_list(resend_webhook_event)')) {
+									return {
+										results: [{ name: 'idx_resend_webhook_event_key', unique: 0 }]
+									};
+								}
+								return { results: [] };
+							},
+							async first() {
+								return sql.includes('COUNT(*)') ? { total: 0 } : null;
+							}
+						};
+					}
+				}
+			}
+		};
+
+		const result = await maintenanceService.health(c);
+
+		expect(result.details.missingIndexes).toEqual(expect.arrayContaining([
+			'idx_delivery_attempt_email',
+			'idx_delivery_attempt_provider_message',
+			'idx_resend_webhook_event_key'
+		]));
+	});
+
 	it('rejects repair requests when D1 is not configured', async () => {
 		await expect(maintenanceService.repair({ env: {} }, 'indexes')).rejects.toThrow('D1 binding is missing');
 	});

@@ -32,9 +32,19 @@ const REQUIRED_INDEXES = [
 	'idx_delivery_attempt_status_time',
 	'idx_delivery_attempt_email',
 	'idx_delivery_attempt_provider_message',
+	'idx_resend_webhook_event_key',
 	'idx_resend_webhook_event_status_time',
 	'idx_resend_webhook_event_provider_email'
 ];
+
+const REQUIRED_UNIQUE_INDEXES = {
+	deliveryAttempt: [
+		'idx_delivery_attempt_key',
+		'idx_delivery_attempt_email',
+		'idx_delivery_attempt_provider_message'
+	],
+	resendWebhookEvent: ['idx_resend_webhook_event_key']
+};
 
 const REQUIRED_COLUMNS = {
 	email: ['attachment_count', 'recovery_after'],
@@ -109,7 +119,9 @@ export async function getBootstrapStatus(c) {
 				emailColumnRows,
 				attachmentColumnRows,
 				deliveryAttemptColumnRows,
-				resendWebhookEventColumnRows
+				resendWebhookEventColumnRows,
+				deliveryAttemptIndexRows,
+				resendWebhookEventIndexRows
 			] = await Promise.all([
 				c.env.db.prepare(`
 					SELECT name
@@ -124,7 +136,9 @@ export async function getBootstrapStatus(c) {
 				c.env.db.prepare('PRAGMA table_info(email)').all(),
 				c.env.db.prepare('PRAGMA table_info(attachments)').all(),
 				c.env.db.prepare('PRAGMA table_info(delivery_attempt)').all(),
-				c.env.db.prepare('PRAGMA table_info(resend_webhook_event)').all()
+				c.env.db.prepare('PRAGMA table_info(resend_webhook_event)').all(),
+				c.env.db.prepare('PRAGMA index_list(delivery_attempt)').all(),
+				c.env.db.prepare('PRAGMA index_list(resend_webhook_event)').all()
 			]);
 			const tableNames = new Set((tableRows.results || []).map(row => row.name));
 			const indexNames = new Set((indexRows.results || []).map(row => row.name));
@@ -142,7 +156,24 @@ export async function getBootstrapStatus(c) {
 				&& REQUIRED_COLUMNS.attachments.every(name => attachmentColumnNames.has(name))
 				&& REQUIRED_COLUMNS.deliveryAttempt.every(name => deliveryAttemptColumnNames.has(name))
 				&& REQUIRED_COLUMNS.resendWebhookEvent.every(name => resendWebhookEventColumnNames.has(name));
-			schemaReady = hasRequiredTables && hasRequiredIndexes && hasRequiredColumns;
+			const uniqueDeliveryAttemptIndexes = new Set(
+				(deliveryAttemptIndexRows.results || [])
+					.filter(row => Number(row.unique) === 1)
+					.map(row => row.name)
+			);
+			const uniqueWebhookIndexes = new Set(
+				(resendWebhookEventIndexRows.results || [])
+					.filter(row => Number(row.unique) === 1)
+					.map(row => row.name)
+			);
+			const hasRequiredUniqueIndexes = REQUIRED_UNIQUE_INDEXES.deliveryAttempt
+				.every(name => uniqueDeliveryAttemptIndexes.has(name))
+				&& REQUIRED_UNIQUE_INDEXES.resendWebhookEvent
+					.every(name => uniqueWebhookIndexes.has(name));
+			schemaReady = hasRequiredTables
+				&& hasRequiredIndexes
+				&& hasRequiredColumns
+				&& hasRequiredUniqueIndexes;
 
 			if (schemaReady) {
 				initialized = !!await c.env.db.prepare('SELECT 1 AS initialized FROM setting LIMIT 1').first();

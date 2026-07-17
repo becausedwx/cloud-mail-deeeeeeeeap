@@ -134,6 +134,27 @@ describe('Resend email status transitions', () => {
 		expect(emailSearchService.syncEmailIds).toHaveBeenCalledOnce();
 	});
 
+	it('does not lose a complaint while weaker delivery states advance concurrently', async () => {
+		await env.db.prepare(`
+			INSERT INTO email (email_id, type, status, resend_email_id)
+			VALUES (60, ?, ?, 'resend-message-racing-complaint')
+		`).bind(emailConst.type.SEND, emailConst.status.SAVING).run();
+
+		await Promise.all([
+			'email.sent',
+			'email.delivery_delayed',
+			'email.delivered',
+			'email.complained'
+		].map(type => resendService.webhooks(unsignedContext(), JSON.stringify({
+			type,
+			data: { email_id: 'resend-message-racing-complaint' }
+		}))));
+
+		expect((await env.db.prepare(`
+			SELECT status FROM email WHERE email_id = 60
+		`).first()).status).toBe(emailConst.status.COMPLAINED);
+	});
+
 	it('advances DELAYED to DELIVERED', async () => {
 		await env.db.prepare(`
 			INSERT INTO email (email_id, type, status, resend_email_id)
@@ -268,10 +289,16 @@ describe('Resend email status transitions', () => {
 			data: { email_id: 'resend-message-6' }
 		});
 
-		await Promise.all([
+		const results = await Promise.allSettled([
 			resendService.webhooks(unsignedContext(), rawBody),
 			resendService.webhooks(unsignedContext(), rawBody)
 		]);
+		expect(results.some(result => result.status === 'fulfilled')).toBe(true);
+		for (const result of results) {
+			if (result.status === 'rejected') {
+				expect(result.reason).toMatchObject({ code: 503 });
+			}
+		}
 
 		expect((await env.db.prepare(`
 			SELECT status FROM email WHERE email_id = 6

@@ -55,6 +55,31 @@ function attachmentStorageError(message, recoveryPending = false) {
 	return error;
 }
 
+function prepareRecoveryStatusUpdate(c, {
+	emailId,
+	keys,
+	status,
+	message,
+	fromStatuses
+}) {
+	const keyPlaceholders = keys.map(() => '?').join(',');
+	const statusPlaceholders = fromStatuses.map(() => '?').join(',');
+	return c.env.db.prepare(`
+		UPDATE attachments
+		SET status = ?, message = ?
+		WHERE email_id = ?
+		  AND key IN (${keyPlaceholders})
+		  AND status IN (${statusPlaceholders})
+	`).bind(status, message, emailId, ...keys, ...fromStatuses);
+}
+
+async function updateRecoveryStatus(c, params) {
+	if (params.keys.length === 0) {
+		return;
+	}
+	await prepareRecoveryStatusUpdate(c, params).run();
+}
+
 async function updateAttachmentKeyStatus(c, attachments, key, status, message = null) {
 	const emailIds = [...new Set(attachments
 		.filter(item => item.key === key)
@@ -227,7 +252,6 @@ const attService = {
 				overflow: true
 			};
 		}
-
 		const rowsByKey = new Map();
 		for (const row of rows) {
 			const keyRows = rowsByKey.get(row.key) || [];
@@ -237,6 +261,9 @@ const attService = {
 		const storageType = rowsByKey.size > 0
 			? await r2Service.storageType(c)
 			: null;
+		const readyKeys = [];
+		const failedKeys = [];
+		const recheckKeys = [];
 
 		for (const [key, keyRows] of rowsByKey) {
 			const statuses = keyRows.map(row => Number(row.status));
@@ -255,47 +282,52 @@ const attService = {
 					row.message === 'OBJECT_MISSING_RECHECK'
 				));
 				if (storageType === 'KV' && !kvMissingAlreadyObserved) {
-					await c.env.db.prepare(`
-						UPDATE attachments
-						SET status = ?, message = ?
-						WHERE email_id = ? AND key = ? AND status IN (?, ?)
-					`).bind(
-						attConst.status.PENDING,
-						'OBJECT_MISSING_RECHECK',
-						emailId,
-						key,
-						attConst.status.READY,
-						attConst.status.PENDING
-					).run();
+					recheckKeys.push(key);
 					continue;
 				}
-				await c.env.db.prepare(`
-					UPDATE attachments
-					SET status = ?, message = ?
-					WHERE email_id = ? AND key = ? AND status IN (?, ?)
-				`).bind(
-					attConst.status.FAILED,
-					'OBJECT_MISSING',
-					emailId,
-					key,
-					attConst.status.READY,
-					attConst.status.PENDING
-				).run();
+				failedKeys.push(key);
 				continue;
 			}
 
 			if (statuses.includes(attConst.status.PENDING)) {
-				await c.env.db.prepare(`
-					UPDATE attachments
-					SET status = ?, message = NULL
-					WHERE email_id = ? AND key = ? AND status = ?
-				`).bind(
-					attConst.status.READY,
-					emailId,
-					key,
-					attConst.status.PENDING
-				).run();
+				readyKeys.push(key);
 			}
+		}
+
+		await updateRecoveryStatus(c, {
+			emailId,
+			keys: readyKeys,
+			status: attConst.status.READY,
+			message: null,
+			fromStatuses: [attConst.status.PENDING]
+		});
+		await updateRecoveryStatus(c, {
+			emailId,
+			keys: failedKeys,
+			status: attConst.status.FAILED,
+			message: 'OBJECT_MISSING',
+			fromStatuses: [attConst.status.READY, attConst.status.PENDING]
+		});
+		if (recheckKeys.length > 0) {
+			await c.env.db.batch([
+				c.env.db.prepare(`
+					UPDATE email
+					SET recovery_after = datetime('now', '+5 minutes'), message = ?
+					WHERE email_id = ? AND type = ? AND status = ?
+				`).bind(
+					'ATTACHMENT_RECOVERY_RETRY',
+					emailId,
+					emailConst.type.RECEIVE,
+					emailConst.status.SAVING
+				),
+				prepareRecoveryStatusUpdate(c, {
+					emailId,
+					keys: recheckKeys,
+					status: attConst.status.PENDING,
+					message: 'OBJECT_MISSING_RECHECK',
+					fromStatuses: [attConst.status.READY, attConst.status.PENDING]
+				})
+			]);
 		}
 
 		const summary = await c.env.db.prepare(`

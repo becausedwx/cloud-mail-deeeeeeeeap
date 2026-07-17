@@ -1,10 +1,19 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { env } from 'cloudflare:test';
+
+vi.mock('../src/service/email-search-service', () => ({
+	default: {
+		syncEmailIds: vi.fn(),
+		removeEmailIds: vi.fn()
+	}
+}));
+
 import deliveryAttemptService, {
 	deliveryAttemptConst
 } from '../src/service/delivery-attempt-service';
 import { emailConst } from '../src/const/entity-const';
 import { dbInit } from '../src/init/init';
+import emailSearchService from '../src/service/email-search-service';
 
 async function resetDeliverySchema() {
 	await env.db.prepare('DROP TABLE IF EXISTS delivery_attempt').run();
@@ -39,6 +48,7 @@ async function resetDeliverySchema() {
 
 describe('delivery attempt service', () => {
 	beforeEach(async () => {
+		vi.clearAllMocks();
 		await resetDeliverySchema();
 	});
 
@@ -213,6 +223,37 @@ describe('delivery attempt service', () => {
 		expect(second.unknown).toBe(0);
 	});
 
+	it('repairs a stale IN_FLIGHT attempt when the accepted provider id already reached the email row', async () => {
+		await env.db.prepare(`
+			INSERT INTO email (email_id, type, status, resend_email_id)
+			VALUES (50, ?, ?, 'resend-message-50')
+		`).bind(emailConst.type.SEND, emailConst.status.SENT).run();
+		const attempt = await deliveryAttemptService.prepare({ env }, {
+			emailId: 50,
+			provider: deliveryAttemptConst.provider.RESEND,
+			attemptKey: 'cloud-mail/50/in-flight-email-final'
+		});
+		await deliveryAttemptService.markInFlight({ env }, attempt.attemptId);
+		await env.db.prepare(`
+			UPDATE delivery_attempt
+			SET update_time = datetime('now', '-20 minutes')
+			WHERE attempt_id = ?
+		`).bind(attempt.attemptId).run();
+
+		const result = await deliveryAttemptService.reconcile({ env });
+
+		const storedAttempt = await env.db.prepare(`
+			SELECT status, provider_message_id AS providerMessageId, error_summary AS errorSummary
+			FROM delivery_attempt WHERE attempt_id = ?
+		`).bind(attempt.attemptId).first();
+		expect(result).toMatchObject({ repaired: 1, unknown: 0 });
+		expect(storedAttempt).toEqual({
+			status: deliveryAttemptConst.status.ACCEPTED,
+			providerMessageId: 'resend-message-50',
+			errorSummary: null
+		});
+	});
+
 	it('fails a stale PREPARED attempt because the provider was never called', async () => {
 		await env.db.prepare(`
 			INSERT INTO email (email_id, type, status)
@@ -246,6 +287,41 @@ describe('delivery attempt service', () => {
 			status: emailConst.status.FAILED,
 			message: 'DELIVERY_ATTEMPT_NOT_STARTED'
 		});
+	});
+
+	it('uses one small shared reconciliation budget per invocation', async () => {
+		for (let emailId = 100; emailId < 110; emailId += 1) {
+			await env.db.prepare(`
+				INSERT INTO email (email_id, type, status)
+				VALUES (?, ?, ?)
+			`).bind(emailId, emailConst.type.SEND, emailConst.status.SAVING).run();
+			const attempt = await deliveryAttemptService.prepare({ env }, {
+				emailId,
+				provider: deliveryAttemptConst.provider.RESEND,
+				attemptKey: `cloud-mail/${emailId}/budget`
+			});
+			await env.db.prepare(`
+				UPDATE delivery_attempt
+				SET update_time = datetime('now', '-20 minutes')
+				WHERE attempt_id = ?
+			`).bind(attempt.attemptId).run();
+		}
+
+		const result = await deliveryAttemptService.reconcile({ env });
+		const counts = await env.db.prepare(`
+			SELECT status, COUNT(*) AS total
+			FROM delivery_attempt
+			GROUP BY status
+			ORDER BY status
+		`).all();
+
+		expect(result).toMatchObject({ scanned: 4, failed: 4 });
+		expect(counts.results).toEqual(expect.arrayContaining([
+			{ status: deliveryAttemptConst.status.FAILED, total: 4 },
+			{ status: deliveryAttemptConst.status.PREPARED, total: 6 }
+		]));
+		expect(emailSearchService.syncEmailIds).toHaveBeenCalledOnce();
+		expect(emailSearchService.syncEmailIds.mock.calls[0][1]).toHaveLength(4);
 	});
 
 	it('repairs a SAVING email from an explicitly FAILED attempt', async () => {
@@ -306,6 +382,116 @@ describe('delivery attempt service', () => {
 				PENDING_ACK: 1
 			}
 		});
+	});
+
+	it('allows only one durable delivery attempt per email under concurrency', async () => {
+		await dbInit.v3_6DB({ env });
+
+		const results = await Promise.allSettled([
+			deliveryAttemptService.prepare({ env }, {
+				emailId: 80,
+				provider: deliveryAttemptConst.provider.RESEND
+			}),
+			deliveryAttemptService.prepare({ env }, {
+				emailId: 80,
+				provider: deliveryAttemptConst.provider.RESEND
+			})
+		]);
+
+		expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+		expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+		expect((await env.db.prepare(`
+			SELECT COUNT(*) AS total FROM delivery_attempt WHERE email_id = 80
+		`).first()).total).toBe(1);
+	});
+
+	it('does not allow one provider message id to identify multiple delivery attempts', async () => {
+		await dbInit.v3_6DB({ env });
+		const first = await deliveryAttemptService.prepare({ env }, {
+			emailId: 81,
+			provider: deliveryAttemptConst.provider.RESEND
+		});
+		const second = await deliveryAttemptService.prepare({ env }, {
+			emailId: 82,
+			provider: deliveryAttemptConst.provider.RESEND
+		});
+		await deliveryAttemptService.markInFlight({ env }, first.attemptId);
+		await deliveryAttemptService.markInFlight({ env }, second.attemptId);
+		await deliveryAttemptService.markAccepted({ env }, first.attemptId, 'resend-shared-id');
+
+		await expect(deliveryAttemptService.markAccepted(
+			{ env },
+			second.attemptId,
+			'resend-shared-id'
+		)).rejects.toThrow();
+	});
+
+	it('repairs a named but non-unique attempt key index', async () => {
+		await env.db.prepare('DROP INDEX idx_delivery_attempt_key').run();
+		await env.db.prepare(`
+			CREATE INDEX idx_delivery_attempt_key ON delivery_attempt(attempt_key)
+		`).run();
+
+		await dbInit.v3_6DB({ env });
+
+		const index = (await env.db.prepare(`
+			PRAGMA index_list(delivery_attempt)
+		`).all()).results.find(row => row.name === 'idx_delivery_attempt_key');
+		expect(index).toEqual(expect.objectContaining({ unique: 1 }));
+	});
+
+	it.each([
+		{
+			name: 'attempt key',
+			first: [91, 'RESEND', 'duplicate-key', null],
+			second: [92, 'RESEND', 'duplicate-key', null]
+		},
+		{
+			name: 'email id',
+			first: [93, 'RESEND', 'email-93-a', null],
+			second: [93, 'RESEND', 'email-93-b', null]
+		},
+		{
+			name: 'provider message id',
+			first: [94, 'RESEND', 'email-94', 'duplicate-provider-id'],
+			second: [95, 'RESEND', 'email-95', 'duplicate-provider-id']
+		}
+	])('rejects duplicate $name data before replacing legacy indexes', async ({ first, second }) => {
+		await env.db.prepare('DROP INDEX idx_delivery_attempt_key').run();
+		for (const sql of [
+			'CREATE INDEX idx_delivery_attempt_key ON delivery_attempt(attempt_key)',
+			'CREATE INDEX idx_delivery_attempt_email ON delivery_attempt(email_id)',
+			`CREATE INDEX idx_delivery_attempt_provider_message
+			 ON delivery_attempt(provider, provider_message_id)
+			 WHERE provider_message_id IS NOT NULL AND provider_message_id <> ''`
+		]) {
+			await env.db.prepare(sql).run();
+		}
+		for (const values of [first, second]) {
+			await env.db.prepare(`
+				INSERT INTO delivery_attempt (
+					email_id, provider, attempt_key, status, provider_message_id
+				) VALUES (?, ?, ?, 'ACCEPTED', ?)
+			`).bind(...values).run();
+		}
+
+		await expect(dbInit.v3_6DB({ env })).rejects.toMatchObject({
+			name: 'BizError',
+			code: 409
+		});
+
+		const indexes = (await env.db.prepare(`
+			PRAGMA index_list(delivery_attempt)
+		`).all()).results;
+		for (const indexName of [
+			'idx_delivery_attempt_key',
+			'idx_delivery_attempt_email',
+			'idx_delivery_attempt_provider_message'
+		]) {
+			expect(indexes.find(row => row.name === indexName)).toEqual(
+				expect.objectContaining({ unique: 0 })
+			);
+		}
 	});
 
 	it('creates the delivery attempt schema idempotently', async () => {

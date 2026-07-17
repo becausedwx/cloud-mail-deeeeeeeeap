@@ -326,21 +326,75 @@ const dbInit = {
 				update_time = COALESCE(update_time, CURRENT_TIMESTAMP)
 			WHERE create_time IS NULL OR update_time IS NULL
 		`).run();
+		const duplicateIdentity = await c.env.db.prepare(`
+			SELECT duplicate_type AS duplicateType
+			FROM (
+				SELECT 'attempt_key' AS duplicate_type
+				FROM delivery_attempt
+				WHERE attempt_key IS NOT NULL AND attempt_key <> ''
+				GROUP BY attempt_key
+				HAVING COUNT(*) > 1
+				UNION ALL
+				SELECT 'email_id' AS duplicate_type
+				FROM delivery_attempt
+				GROUP BY email_id
+				HAVING COUNT(*) > 1
+				UNION ALL
+				SELECT 'provider_message_id' AS duplicate_type
+				FROM delivery_attempt
+				WHERE provider_message_id IS NOT NULL AND provider_message_id <> ''
+				GROUP BY provider, provider_message_id
+				HAVING COUNT(*) > 1
+			)
+			LIMIT 1
+		`).first();
+		if (duplicateIdentity) {
+			throw new BizError(
+				`Delivery attempt ${duplicateIdentity.duplicateType} duplicates require manual review`,
+				409
+			);
+		}
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_status_time
+			ON delivery_attempt(status, update_time, attempt_id)
+		`).run();
+		const deliveryAttemptIndexes = await c.env.db.prepare(`
+			PRAGMA index_list(delivery_attempt)
+		`).all();
+		const deliveryAttemptKeyIndex = (deliveryAttemptIndexes.results || [])
+			.find(row => row.name === 'idx_delivery_attempt_key');
+		const deliveryAttemptEmailIndex = (deliveryAttemptIndexes.results || [])
+			.find(row => row.name === 'idx_delivery_attempt_email');
+		const deliveryAttemptProviderMessageIndex = (deliveryAttemptIndexes.results || [])
+			.find(row => row.name === 'idx_delivery_attempt_provider_message');
+		if (deliveryAttemptKeyIndex && Number(deliveryAttemptKeyIndex.unique) !== 1) {
+			await c.env.db.prepare(`
+				DROP INDEX idx_delivery_attempt_key
+			`).run();
+		}
+		if (deliveryAttemptEmailIndex && Number(deliveryAttemptEmailIndex.unique) !== 1) {
+			await c.env.db.prepare(`
+				DROP INDEX idx_delivery_attempt_email
+			`).run();
+		}
+		if (deliveryAttemptProviderMessageIndex
+			&& Number(deliveryAttemptProviderMessageIndex.unique) !== 1) {
+			await c.env.db.prepare(`
+				DROP INDEX idx_delivery_attempt_provider_message
+			`).run();
+		}
 		await c.env.db.prepare(`
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_key
 			ON delivery_attempt(attempt_key)
 		`).run();
 		await c.env.db.prepare(`
-			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_status_time
-			ON delivery_attempt(status, update_time, attempt_id)
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_email
+			ON delivery_attempt(email_id)
 		`).run();
 		await c.env.db.prepare(`
-			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_email
-			ON delivery_attempt(email_id, attempt_id)
-		`).run();
-		await c.env.db.prepare(`
-			CREATE INDEX IF NOT EXISTS idx_delivery_attempt_provider_message
-			ON delivery_attempt(provider, provider_message_id, attempt_id)
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_attempt_provider_message
+			ON delivery_attempt(provider, provider_message_id)
+			WHERE provider_message_id IS NOT NULL AND provider_message_id <> ''
 		`).run();
 	},
 
@@ -388,6 +442,20 @@ const dbInit = {
 			UPDATE resend_webhook_event
 			SET received_at = CURRENT_TIMESTAMP
 			WHERE received_at IS NULL
+		`).run();
+		const webhookIndexes = await c.env.db.prepare(`
+			PRAGMA index_list(resend_webhook_event)
+		`).all();
+		const webhookEventKeyIndex = (webhookIndexes.results || [])
+			.find(row => row.name === 'idx_resend_webhook_event_key');
+		if (webhookEventKeyIndex && Number(webhookEventKeyIndex.unique) !== 1) {
+			await c.env.db.prepare(`
+				DROP INDEX idx_resend_webhook_event_key
+			`).run();
+		}
+		await c.env.db.prepare(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_resend_webhook_event_key
+			ON resend_webhook_event(event_key)
 		`).run();
 		await c.env.db.prepare(`
 			CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_status_time

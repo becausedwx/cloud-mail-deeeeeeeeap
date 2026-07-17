@@ -26,6 +26,8 @@ function readyDb({
 	attachmentColumns,
 	includeDeliveryAttempt = false,
 	includeWebhookEvent = false,
+	uniqueDeliveryIndexes = true,
+	uniqueWebhookIndex = true,
 	deliveryAttemptColumns = [
 		'attempt_id', 'email_id', 'provider', 'attempt_key', 'status',
 		'provider_message_id', 'error_summary', 'create_time', 'update_time'
@@ -42,6 +44,22 @@ function readyDb({
 					return this;
 				},
 				async all() {
+					if (sql.includes('PRAGMA index_list(delivery_attempt)')) {
+						return {
+							results: includeDeliveryAttempt ? [
+								{ name: 'idx_delivery_attempt_key', unique: uniqueDeliveryIndexes ? 1 : 0 },
+								{ name: 'idx_delivery_attempt_email', unique: uniqueDeliveryIndexes ? 1 : 0 },
+								{ name: 'idx_delivery_attempt_provider_message', unique: uniqueDeliveryIndexes ? 1 : 0 }
+							] : []
+						};
+					}
+					if (sql.includes('PRAGMA index_list(resend_webhook_event)')) {
+						return {
+							results: includeWebhookEvent ? [
+								{ name: 'idx_resend_webhook_event_key', unique: uniqueWebhookIndex ? 1 : 0 }
+							] : []
+						};
+					}
 					if (sql.includes("type = 'table'")) {
 						const names = [...REQUIRED_TABLES];
 						if (includeDeliveryAttempt) names.push('delivery_attempt');
@@ -66,6 +84,7 @@ function readyDb({
 						}
 						if (includeWebhookEvent) {
 							names.push(
+								{ name: 'idx_resend_webhook_event_key' },
 								{ name: 'idx_resend_webhook_event_status_time' },
 								{ name: 'idx_resend_webhook_event_provider_email' }
 							);
@@ -160,6 +179,29 @@ describe('bootstrap schema readiness', () => {
 
 		expect(status.schemaReady).toBe(true);
 		expect(status.ready).toBe(true);
+	});
+
+	it('does not report ready when durable identity indexes are not unique', async () => {
+		const status = await getBootstrapStatus({
+			env: {
+				db: readyDb({
+					emailColumns: ['email_id', 'attachment_count', 'recovery_after'],
+					attachmentColumns: ['att_id', 'status', 'message'],
+					includeDeliveryAttempt: true,
+					includeWebhookEvent: true,
+					uniqueDeliveryIndexes: false,
+					uniqueWebhookIndex: false
+				}),
+				kv: {},
+				assets: {},
+				domain: ['example.com'],
+				admin: 'admin@example.com',
+				jwt_secret: 'configured'
+			}
+		});
+
+		expect(status.schemaReady).toBe(false);
+		expect(status.ready).toBe(false);
 	});
 
 	it('does not report ready when the Resend webhook event schema is missing', async () => {

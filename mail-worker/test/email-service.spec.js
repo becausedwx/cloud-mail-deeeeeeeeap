@@ -185,6 +185,9 @@ function createDbRecorder(selectRows = [], onRun = null) {
 					async all() {
 						return { results: selectRows };
 					},
+					async first() {
+						return selectRows[0] || null;
+					},
 					async run() {
 						if (onRun) {
 							return onRun(this);
@@ -266,7 +269,7 @@ describe('email service status synchronization', () => {
 			const selectStatement = recorder.statements.find(statement => statement.sql.includes('attachment_count'));
 			expect(selectStatement.sql).not.toContain('is_del = ?');
 			expect(selectStatement.sql).toContain("datetime('now', '-10 minutes')");
-			expect(selectStatement.sql).toContain('LIMIT 4');
+		expect(selectStatement.sql).toContain('LIMIT 2');
 			expect(attService.reconcileReceived).toHaveBeenCalledWith(c, 1);
 			expect(mockState.updates[0]).toEqual({
 				status: emailConst.status.FAILED,
@@ -696,6 +699,132 @@ describe('email service status synchronization', () => {
 			status: emailConst.status.SAVING,
 			message: 'DELIVERY_OUTCOME_UNKNOWN'
 		});
+	});
+
+	it('marks a documented Cloudflare Email rejection as FAILED', async () => {
+		const providerError = Object.assign(new Error('sender domain is not verified'), {
+			code: 'E_SENDER_NOT_VERIFIED'
+		});
+		const sendMock = vi.fn(async () => {
+			throw providerError;
+		});
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		await expect(emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			sendType: 'new',
+			receiveEmail: ['to@external.example.com'],
+			text: 'Hello',
+			content: '<p>Hello</p>',
+			subject: 'Hello'
+		}, 1)).rejects.toThrow('sender domain is not verified');
+
+		const operationTypes = mockState.operationLog.map(operation => operation.type);
+		expect(operationTypes).toContain('attempt-failed');
+		expect(operationTypes).not.toContain('attempt-unknown');
+		expect(mockState.updates.at(-1)).toMatchObject({
+			status: emailConst.status.FAILED,
+			message: 'DELIVERY_PROVIDER_REJECTED'
+		});
+	});
+
+	it('treats a Resend 5xx response as UNKNOWN instead of an explicit rejection', async () => {
+		mockState.settingResult.resendTokens = {
+			'example.com': 'test-resend-token'
+		};
+		const providerSpy = vi.spyOn(emailService, 'sendByResend').mockResolvedValue({
+			data: null,
+			error: {
+				message: 'Resend is temporarily unavailable',
+				statusCode: 503,
+				name: 'application_error'
+			}
+		});
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		try {
+			await expect(emailService.send(c, {
+				accountId: 1,
+				name: 'Sender',
+				sendType: 'new',
+				receiveEmail: ['to@external.example.com'],
+				text: 'Hello',
+				content: '<p>Hello</p>',
+				subject: 'Hello'
+			}, 1)).rejects.toMatchObject({
+				code: 502,
+				message: 'Delivery outcome is unknown; do not retry automatically'
+			});
+
+			const operationTypes = mockState.operationLog.map(operation => operation.type);
+			expect(operationTypes).toContain('attempt-unknown');
+			expect(operationTypes).not.toContain('attempt-failed');
+			expect(mockState.updates.at(-1)).toMatchObject({
+				status: emailConst.status.SAVING,
+				message: 'DELIVERY_OUTCOME_UNKNOWN'
+			});
+		} finally {
+			providerSpy.mockRestore();
+		}
+	});
+
+	it('treats a concurrent Resend idempotency request as UNKNOWN', async () => {
+		mockState.settingResult.resendTokens = {
+			'example.com': 'test-resend-token'
+		};
+		const providerSpy = vi.spyOn(emailService, 'sendByResend').mockResolvedValue({
+			data: null,
+			error: {
+				message: 'A request with this idempotency key is still processing',
+				statusCode: 409,
+				name: 'concurrent_idempotent_requests'
+			}
+		});
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		try {
+			await expect(emailService.send(c, {
+				accountId: 1,
+				name: 'Sender',
+				sendType: 'new',
+				receiveEmail: ['to@external.example.com'],
+				text: 'Hello',
+				content: '<p>Hello</p>',
+				subject: 'Hello'
+			}, 1)).rejects.toMatchObject({ code: 502 });
+
+			const operationTypes = mockState.operationLog.map(operation => operation.type);
+			expect(operationTypes).toContain('attempt-unknown');
+			expect(operationTypes).not.toContain('attempt-failed');
+		} finally {
+			providerSpy.mockRestore();
+		}
 	});
 
 	it('marks the attempt and email FAILED when Resend explicitly rejects the request', async () => {

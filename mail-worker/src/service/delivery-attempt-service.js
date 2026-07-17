@@ -24,6 +24,7 @@ const UNRESOLVED_STATUSES = new Set([
 	deliveryAttemptConst.status.PENDING_ACK,
 	deliveryAttemptConst.status.UNKNOWN
 ]);
+const DEFAULT_RECONCILE_LIMIT = 4;
 
 function createAttemptKey(emailId) {
 	return `cloud-mail/${emailId}/${crypto.randomUUID()}`;
@@ -173,17 +174,28 @@ const deliveryAttemptService = {
 		return { total, unresolved, counts };
 	},
 
-	async reconcile(c, { limit = 50, staleMinutes = 10 } = {}) {
-		const batchLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
+	async reconcile(c, { limit = DEFAULT_RECONCILE_LIMIT, staleMinutes = 10 } = {}) {
+		const batchLimit = Math.max(1, Math.min(
+			Number(limit) || DEFAULT_RECONCILE_LIMIT,
+			20
+		));
 		const staleAge = Math.max(1, Math.min(Number(staleMinutes) || 10, 24 * 60));
 		const { results: staleAttempts = [] } = await c.env.db.prepare(`
-			SELECT attempt_id AS attemptId, email_id AS emailId, status
-			FROM delivery_attempt
-			WHERE status IN (?, ?)
-			  AND update_time <= datetime('now', ?)
-			ORDER BY attempt_id
+			SELECT
+				da.attempt_id AS attemptId,
+				da.email_id AS emailId,
+				da.status,
+				da.provider_message_id AS providerMessageId,
+				e.status AS emailStatus,
+				e.resend_email_id AS emailProviderMessageId
+			FROM delivery_attempt da
+			LEFT JOIN email e ON e.email_id = da.email_id AND e.type = ?
+			WHERE da.status IN (?, ?)
+			  AND da.update_time <= datetime('now', ?)
+			ORDER BY da.attempt_id
 			LIMIT ${batchLimit}
 		`).bind(
+			emailConst.type.SEND,
 			deliveryAttemptConst.status.PREPARED,
 			deliveryAttemptConst.status.IN_FLIGHT,
 			`-${staleAge} minutes`
@@ -191,6 +203,8 @@ const deliveryAttemptService = {
 
 		let unknown = 0;
 		let failed = 0;
+		let repaired = 0;
+		const changedEmailIds = new Set();
 		for (const attempt of staleAttempts) {
 			if (attempt.status === deliveryAttemptConst.status.PREPARED) {
 				const result = await c.env.db.prepare(`
@@ -207,7 +221,7 @@ const deliveryAttemptService = {
 					continue;
 				}
 				failed += 1;
-				await c.env.db.prepare(`
+				const emailResult = await c.env.db.prepare(`
 					UPDATE email
 					SET status = ?, message = ?
 					WHERE email_id = ? AND type = ? AND status = ?
@@ -218,9 +232,35 @@ const deliveryAttemptService = {
 					emailConst.type.SEND,
 					emailConst.status.SAVING
 				).run();
+				if (Number(emailResult?.meta?.changes || 0) === 1) {
+					changedEmailIds.add(attempt.emailId);
+				}
 				continue;
 			}
 			if (attempt.status !== deliveryAttemptConst.status.IN_FLIGHT) {
+				continue;
+			}
+			const acceptedProviderMessageId = attempt.providerMessageId
+				|| attempt.emailProviderMessageId;
+			if (acceptedProviderMessageId
+				&& Number(attempt.emailStatus) !== emailConst.status.SAVING) {
+				const result = await c.env.db.prepare(`
+					UPDATE delivery_attempt
+					SET status = ?,
+						provider_message_id = ?,
+						error_summary = NULL,
+						update_time = CURRENT_TIMESTAMP
+					WHERE attempt_id = ? AND status = ?
+				`).bind(
+					deliveryAttemptConst.status.ACCEPTED,
+					acceptedProviderMessageId,
+					attempt.attemptId,
+					deliveryAttemptConst.status.IN_FLIGHT
+				).run();
+				if (Number(result?.meta?.changes || 0) === 1) {
+					repaired += 1;
+					changedEmailIds.add(attempt.emailId);
+				}
 				continue;
 			}
 			const result = await c.env.db.prepare(`
@@ -249,32 +289,36 @@ const deliveryAttemptService = {
 			).run();
 		}
 
-		const { results: attempts = [] } = await c.env.db.prepare(`
-			SELECT
-				da.attempt_id AS attemptId,
-				da.email_id AS emailId,
-				da.provider,
-				da.status,
-				da.provider_message_id AS providerMessageId,
-				e.status AS emailStatus
-			FROM delivery_attempt da
-			JOIN email e ON e.email_id = da.email_id
-			WHERE e.type = ?
-			  AND (
-				da.status = ?
-				OR (da.status IN (?, ?) AND e.status = ?)
-			  )
-			ORDER BY da.attempt_id
-			LIMIT ${batchLimit}
-		`).bind(
-			emailConst.type.SEND,
-			deliveryAttemptConst.status.PENDING_ACK,
-			deliveryAttemptConst.status.ACCEPTED,
-			deliveryAttemptConst.status.FAILED,
-			emailConst.status.SAVING
-		).all();
+		const remainingBudget = Math.max(0, batchLimit - staleAttempts.length);
+		let attempts = [];
+		if (remainingBudget > 0) {
+			const result = await c.env.db.prepare(`
+				SELECT
+					da.attempt_id AS attemptId,
+					da.email_id AS emailId,
+					da.provider,
+					da.status,
+					da.provider_message_id AS providerMessageId,
+					e.status AS emailStatus
+				FROM delivery_attempt da
+				JOIN email e ON e.email_id = da.email_id
+				WHERE e.type = ?
+				  AND (
+					da.status = ?
+					OR (da.status IN (?, ?) AND e.status = ?)
+				  )
+				ORDER BY da.attempt_id
+				LIMIT ${remainingBudget}
+			`).bind(
+				emailConst.type.SEND,
+				deliveryAttemptConst.status.PENDING_ACK,
+				deliveryAttemptConst.status.ACCEPTED,
+				deliveryAttemptConst.status.FAILED,
+				emailConst.status.SAVING
+			).all();
+			attempts = result.results || [];
+		}
 
-		let repaired = 0;
 		for (const attempt of attempts) {
 			if (attempt.status === deliveryAttemptConst.status.FAILED) {
 				const emailResult = await c.env.db.prepare(`
@@ -290,6 +334,7 @@ const deliveryAttemptService = {
 				).run();
 				if (Number(emailResult?.meta?.changes || 0) === 1) {
 					repaired += 1;
+					changedEmailIds.add(attempt.emailId);
 				}
 				continue;
 			}
@@ -326,14 +371,18 @@ const deliveryAttemptService = {
 			).run();
 			if (Number(emailResult?.meta?.changes || 0) === 1) {
 				changed = true;
-				try {
-					await emailSearchService.syncEmailIds(c, [attempt.emailId]);
-				} catch {
-					// The authoritative email row is repaired; search can be rebuilt separately.
-				}
+				changedEmailIds.add(attempt.emailId);
 			}
 			if (changed) {
 				repaired += 1;
+				changedEmailIds.add(attempt.emailId);
+			}
+		}
+		if (changedEmailIds.size > 0) {
+			try {
+				await emailSearchService.syncEmailIds(c, [...changedEmailIds]);
+			} catch {
+				// The authoritative email rows are repaired; search can be rebuilt separately.
 			}
 		}
 

@@ -58,8 +58,8 @@ describe('scheduled handler', () => {
 		await worker.scheduled({ cron: '*/30 * * * *' }, {}, {});
 
 		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
-		expect(mocks.completeReceiveAll).toHaveBeenCalledTimes(1);
-		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledTimes(1);
+		expect(mocks.completeReceiveAll).toHaveBeenCalledWith({ env: {} }, { limit: 1 });
+		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledWith({ env: {} }, { limit: 2 });
 		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
 		expect(mocks.clearExpiredOAuthSecurity).toHaveBeenCalledTimes(1);
 		expect(mocks.clearRecord).not.toHaveBeenCalled();
@@ -75,8 +75,8 @@ describe('scheduled handler', () => {
 
 		expect(mocks.clearRecord).toHaveBeenCalledTimes(1);
 		expect(mocks.resetDaySendCount).toHaveBeenCalledTimes(1);
-		expect(mocks.completeReceiveAll).toHaveBeenCalledTimes(1);
-		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledTimes(1);
+		expect(mocks.completeReceiveAll).toHaveBeenCalledWith({ env: {} }, { limit: 1 });
+		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledWith({ env: {} }, { limit: 2 });
 		expect(mocks.clearNoBindOathUser).toHaveBeenCalledTimes(1);
 		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
 		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);

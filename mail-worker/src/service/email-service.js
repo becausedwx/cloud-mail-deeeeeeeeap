@@ -30,7 +30,28 @@ const CLOUDFLARE_EMAIL_MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
 const RESEND_MAX_MESSAGE_BYTES = 40 * 1000 * 1000;
 const PROVIDER_MESSAGE_OVERHEAD_BYTES = 2 * 1024;
 const PROVIDER_ATTACHMENT_OVERHEAD_BYTES = 1024;
-const RECEIVE_RECOVERY_EMAIL_LIMIT = 4;
+const RECEIVE_RECOVERY_EMAIL_LIMIT = 2;
+const CLOUDFLARE_EMAIL_EXPLICIT_ERROR_CODES = new Set([
+	'E_VALIDATION_ERROR',
+	'E_FIELD_MISSING',
+	'E_TOO_MANY_RECIPIENTS',
+	'E_TOO_MANY_ATTACHMENTS',
+	'E_SENDER_NOT_VERIFIED',
+	'E_RECIPIENT_NOT_ALLOWED',
+	'E_RECIPIENT_SUPPRESSED',
+	'E_SENDER_DOMAIN_NOT_AVAILABLE',
+	'E_CONTENT_TOO_LARGE',
+	'E_DELIVERY_FAILED',
+	'E_RATE_LIMIT_EXCEEDED',
+	'E_DAILY_LIMIT_EXCEEDED',
+	'E_HEADER_NOT_ALLOWED',
+	'E_HEADER_USE_API_FIELD',
+	'E_HEADER_VALUE_INVALID',
+	'E_HEADER_VALUE_TOO_LONG',
+	'E_HEADER_NAME_INVALID',
+	'E_HEADERS_TOO_LARGE',
+	'E_HEADERS_TOO_MANY'
+]);
 const RECEIVE_FAILURE_CODES = new Set([
 	'ATTACHMENT_STORAGE_FAILED',
 	'ATTACHMENT_OBJECT_WRITE_FAILED',
@@ -43,6 +64,26 @@ const RECEIVE_FAILURE_CODES = new Set([
 
 function normalizeReceiveFailureCode(value) {
 	return RECEIVE_FAILURE_CODES.has(value) ? value : 'RECEIVE_FAILED';
+}
+
+function isUncertainResendError(error) {
+	if (!error || typeof error !== 'object') {
+		return false;
+	}
+	if (String(error.name || '').toLowerCase() === 'concurrent_idempotent_requests') {
+		return true;
+	}
+
+	if (error.statusCode === null) {
+		return true;
+	}
+
+	const statusCode = Number(error.statusCode);
+	return Number.isInteger(statusCode) && (statusCode === 429 || statusCode >= 500);
+}
+
+function isExplicitCloudflareEmailError(error) {
+	return CLOUDFLARE_EMAIL_EXPLICIT_ERROR_CODES.has(String(error?.code || '').toUpperCase());
 }
 
 function base64PayloadLength(content) {
@@ -536,8 +577,11 @@ const emailService = {
 				emailId: emailResult.emailId
 			});
 
-			emailResult.status = useCloudflareEmail ? emailConst.status.DELIVERED : emailConst.status.SENT;
-			emailResult.resendEmailId = sendResult.data?.id;
+			const finalizedStatus = Number(sendResult.emailRow?.status);
+			emailResult.status = Number.isInteger(finalizedStatus)
+				? finalizedStatus
+				: (useCloudflareEmail ? emailConst.status.DELIVERED : emailConst.status.SENT);
+			emailResult.resendEmailId = sendResult.emailRow?.resendEmailId || sendResult.data?.id;
 		}
 
 		//如果全是站内接收方，直接写入数据库
@@ -627,6 +671,19 @@ const emailService = {
 				);
 			}
 		} catch (e) {
+			if (params.useCloudflareEmail && isExplicitCloudflareEmailError(e)) {
+				try {
+					await deliveryAttemptService.markFailed(
+						c,
+						attempt.attemptId,
+						'PROVIDER_REJECTED'
+					);
+				} catch {
+					// The email row still records the explicit provider rejection below.
+				}
+				await this.markSendFailed(c, params.emailId, 'DELIVERY_PROVIDER_REJECTED');
+				throw new BizError(e?.message || 'Email provider rejected the message');
+			}
 			try {
 				await deliveryAttemptService.markUnknown(
 					c,
@@ -643,6 +700,19 @@ const emailService = {
 		const { data, error } = sendResult;
 
 		if (error) {
+			if (!params.useCloudflareEmail && isUncertainResendError(error)) {
+				try {
+					await deliveryAttemptService.markUnknown(
+						c,
+						attempt.attemptId,
+						'PROVIDER_CALL_UNCERTAIN'
+					);
+				} catch {
+					// A stale IN_FLIGHT row is reconciled to UNKNOWN without calling the provider again.
+				}
+				await this.markSendUnknown(c, params.emailId);
+				throw new BizError('Delivery outcome is unknown; do not retry automatically', 502);
+			}
 			await deliveryAttemptService.markFailed(
 				c,
 				attempt.attemptId,
@@ -667,14 +737,26 @@ const emailService = {
 			updateData.resendEmailId = data.id;
 		}
 
+		let finalizedEmail = null;
 		try {
-			await orm(c).update(email).set(updateData).where(eq(email.emailId, params.emailId)).run();
+			const updateResult = await orm(c).update(email).set(updateData).where(and(
+				eq(email.emailId, params.emailId),
+				eq(email.type, emailConst.type.SEND),
+				eq(email.status, emailConst.status.SAVING)
+			)).run();
+			if (Number(updateResult?.meta?.changes) === 0 && c.env?.db) {
+				finalizedEmail = await c.env.db.prepare(`
+					SELECT status, resend_email_id AS resendEmailId
+					FROM email
+					WHERE email_id = ? AND type = ?
+				`).bind(params.emailId, emailConst.type.SEND).first();
+			}
 			await emailSearchService.syncEmailIds(c, [params.emailId]);
 		} catch (e) {
 			console.error(`Post-send status update failed for email ${params.emailId}:`, e?.message || e);
 		}
 
-		return { data: data || {} };
+		return { data: data || {}, emailRow: finalizedEmail };
 	},
 
 	async markSendFailed(c, emailId, message) {
@@ -1186,77 +1268,53 @@ const emailService = {
 		const message = typeof params.message === 'string'
 			? params.message.slice(0, 512)
 			: null;
-		for (let attempt = 0; attempt < 3; attempt += 1) {
-			const current = await c.env.db.prepare(`
-				SELECT email_id AS emailId, status
-				FROM email
-				WHERE email_id = COALESCE(
-					(
-						SELECT email_id
-						FROM email
-						WHERE type = ? AND resend_email_id = ?
-						ORDER BY email_id
-						LIMIT 1
-					),
-					(
-						SELECT da.email_id
-						FROM delivery_attempt da
-						JOIN email target ON target.email_id = da.email_id
-						WHERE da.provider = ?
-						  AND da.provider_message_id = ?
-						  AND target.type = ?
-						ORDER BY da.attempt_id DESC
-						LIMIT 1
-					)
-				  )
-				  AND type = ?
-				LIMIT 1
-			`).bind(
-				emailConst.type.SEND,
-				resendEmailId,
-				deliveryAttemptConst.provider.RESEND,
-				resendEmailId,
-				emailConst.type.SEND,
-				emailConst.type.SEND
-			).first();
-			if (!current) {
-				return null;
-			}
-			if (Number(current.status) === status) {
-				try {
-					await emailSearchService.syncEmailIds(c, [current.emailId]);
-				} catch {
-					// The authoritative email row is already correct; search can be rebuilt separately.
-				}
-				return current;
-			}
-			if (!allowedStatuses.includes(Number(current.status))) {
-				return null;
-			}
-
-			const emailRow = await c.env.db.prepare(`
-				UPDATE email
-				SET status = ?, message = ?
-				WHERE email_id = ? AND type = ? AND status = ?
-				RETURNING email_id AS emailId, status
-			`).bind(
-				status,
-				message,
-				current.emailId,
-				emailConst.type.SEND,
-				current.status
-			).first();
-			if (!emailRow) {
-				continue;
-			}
-			try {
-				await emailSearchService.syncEmailIds(c, [emailRow.emailId]);
-			} catch {
-				// The authoritative email row is updated; search can be rebuilt separately.
-			}
-			return emailRow;
+		const transitionStatuses = [...new Set([status, ...allowedStatuses])];
+		const statusPlaceholders = transitionStatuses.map(() => '?').join(',');
+		const emailRow = await c.env.db.prepare(`
+			UPDATE email
+			SET status = ?, message = ?
+			WHERE email_id = COALESCE(
+				(
+					SELECT email_id
+					FROM email
+					WHERE type = ? AND resend_email_id = ?
+					ORDER BY email_id
+					LIMIT 1
+				),
+				(
+					SELECT da.email_id
+					FROM delivery_attempt da
+					JOIN email target ON target.email_id = da.email_id
+					WHERE da.provider = ?
+					  AND da.provider_message_id = ?
+					  AND target.type = ?
+					ORDER BY da.attempt_id DESC
+					LIMIT 1
+				)
+			  )
+			  AND type = ?
+			  AND status IN (${statusPlaceholders})
+			RETURNING email_id AS emailId, status
+		`).bind(
+			status,
+			message,
+			emailConst.type.SEND,
+			resendEmailId,
+			deliveryAttemptConst.provider.RESEND,
+			resendEmailId,
+			emailConst.type.SEND,
+			emailConst.type.SEND,
+			...transitionStatuses
+		).first();
+		if (!emailRow) {
+			return null;
 		}
-		return null;
+		try {
+			await emailSearchService.syncEmailIds(c, [emailRow.emailId]);
+		} catch {
+			// The authoritative email row is updated; search can be rebuilt separately.
+		}
+		return emailRow;
 	},
 
 	async selectUserEmailCountList(c, userIds, type, del = isDel.NORMAL) {
@@ -1553,7 +1611,12 @@ const emailService = {
 		).run();
 	},
 
-	async completeReceiveAll(c) {
+	async completeReceiveAll(c, { limit = RECEIVE_RECOVERY_EMAIL_LIMIT } = {}) {
+		const requestedLimit = Number(limit);
+		const batchLimit = Math.max(1, Math.min(
+			Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : RECEIVE_RECOVERY_EMAIL_LIMIT,
+			RECEIVE_RECOVERY_EMAIL_LIMIT
+		));
 		const { results: pendingRows = [] } = await c.env.db.prepare(`
 			SELECT
 				e.email_id AS emailId,
@@ -1567,10 +1630,26 @@ const emailService = {
 			  AND e.create_time <= datetime('now', '-10 minutes')
 			  AND (e.recovery_after IS NULL OR e.recovery_after <= CURRENT_TIMESTAMP)
 			ORDER BY COALESCE(e.recovery_after, e.create_time), e.email_id
-			LIMIT ${RECEIVE_RECOVERY_EMAIL_LIMIT}
+			LIMIT ${batchLimit}
 		`).bind(emailConst.status.SAVING, emailConst.type.RECEIVE).all();
 
 		for (const pendingRow of pendingRows) {
+			const claimed = await c.env.db.prepare(`
+				UPDATE email
+				SET recovery_after = datetime('now', '+5 minutes')
+				WHERE email_id = ?
+				  AND type = ?
+				  AND status = ?
+				  AND (recovery_after IS NULL OR recovery_after <= CURRENT_TIMESTAMP)
+				RETURNING email_id AS emailId
+			`).bind(
+				pendingRow.emailId,
+				emailConst.type.RECEIVE,
+				emailConst.status.SAVING
+			).first();
+			if (!claimed) {
+				continue;
+			}
 			let summary;
 			try {
 				summary = await attService.reconcileReceived(c, pendingRow.emailId);
