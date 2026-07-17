@@ -101,7 +101,7 @@ import {emailSend} from "@/request/email.js";
 import {isEmail} from "@/utils/verify-utils.js";
 import {useAccountStore} from "@/store/account.js";
 import {useEmailStore} from "@/store/email.js";
-import {fileToBase64, formatBytes} from "@/utils/file-utils.js";
+import {base64Size, fileToBase64, formatBytes} from "@/utils/file-utils.js";
 import {getIconByName} from "@/utils/icon-utils.js";
 import sendPercent from "@/components/send-percent/index.vue"
 import {toOssDomain} from "@/utils/convert.js";
@@ -114,6 +114,7 @@ import dayjs from "dayjs";
 import {useI18n} from "vue-i18n";
 import router from "@/router/index.js";
 import {ElMessageBox} from "element-plus";
+import {getSendLimitViolation, SEND_LIMITS} from "@/layout/write/send-limits.js";
 
 defineExpose({
   open,
@@ -189,15 +190,14 @@ function deleteContact() {
 function chooseContact() {
 
   const contactList = contactsTabRef.value.getSelectionRows().map(item => item.email);
-  contactList.forEach(item => {
-    if (!form.receiveEmail.includes(item)) {
-      form.receiveEmail.push(item);
-    }
-  })
-
-  form.receiveEmail = form.receiveEmail.filter(item => {
-    return contactList.includes(item) || !writerStore.sendRecipientRecord.includes(item);
-  });
+  const customRecipients = form.receiveEmail.filter(
+      item => !writerStore.sendRecipientRecord.includes(item)
+  );
+  const nextRecipients = [...new Set([...customRecipients, ...contactList])];
+  if (nextRecipients.length > SEND_LIMITS.maxRecipients) {
+    showSendLimitViolation({type: 'recipients'});
+  }
+  form.receiveEmail = nextRecipients.slice(0, SEND_LIMITS.maxRecipients);
 
   showContacts.value = false
 }
@@ -207,6 +207,11 @@ function clearSelectContact() {
 }
 
 function selectChange(value) {
+  if (!value || form.receiveEmail.includes(value)) return
+  if (form.receiveEmail.length >= SEND_LIMITS.maxRecipients) {
+    showSendLimitViolation({type: 'recipients'})
+    return
+  }
   form.receiveEmail.push(value)
 }
 
@@ -241,12 +246,16 @@ function addTagChange(val) {
   form.receiveEmail.splice(form.receiveEmail.length - 1, 1)
 
   let has = false
-  emails.forEach(email => {
+  for (const email of emails) {
     if (isEmail(email) && !form.receiveEmail.includes(email)) {
+      if (form.receiveEmail.length >= SEND_LIMITS.maxRecipients) {
+        showSendLimitViolation({type: 'recipients'})
+        break
+      }
       form.receiveEmail.push(email)
       has = true
     }
-  })
+  }
   if (selectStatus && has) openSelect()
 }
 
@@ -266,8 +275,45 @@ function delAtt(index) {
 }
 
 //附件大小限制：base64 内联在 JSON 里发送，过大会拖垮内存和请求
-const MAX_ATT_SIZE_MB = 25
-const MAX_ATT_TOTAL_SIZE_MB = 30
+const MIB = 1024 * 1024
+const MAX_ATT_SIZE_MB = SEND_LIMITS.maxAttachmentBytes / MIB
+const MAX_ATT_TOTAL_SIZE_MB = SEND_LIMITS.maxAttachmentsBytes / MIB
+
+function currentAttachmentSizes(extraSize) {
+  const sizes = form.attachments.map(item => {
+    if (Number.isFinite(Number(item.size)) && Number(item.size) >= 0) {
+      return Number(item.size)
+    }
+    const content = typeof item.content === 'string' ? item.content.split(',').pop() : ''
+    return content ? base64Size(content) : 0
+  })
+  if (extraSize !== undefined) sizes.push(extraSize)
+  return sizes
+}
+
+function showSendLimitViolation(violation, filename = '') {
+  let message = ''
+  switch (violation?.type) {
+    case 'recipients':
+      message = t('recipientLimitMsg', {count: SEND_LIMITS.maxRecipients})
+      break
+    case 'attachment-count':
+      message = t('attCountLimitMsg', {count: SEND_LIMITS.maxAttachments})
+      break
+    case 'attachment-size':
+      message = t('attTooLargeMsg', {name: filename || t('attachments'), size: MAX_ATT_SIZE_MB})
+      break
+    case 'attachment-total':
+      message = t('attTotalTooLargeMsg', {size: MAX_ATT_TOTAL_SIZE_MB})
+      break
+    case 'content':
+      message = t('contentTooLargeMsg', {size: SEND_LIMITS.maxContentBytes / MIB})
+      break
+    default:
+      return
+  }
+  ElMessage({message, type: 'error', plain: true})
+}
 
 function chooseFile() {
   const doc = document.createElement("input")
@@ -284,23 +330,10 @@ function chooseFile() {
       const filename = file.name
       const contentType = file.type
 
-      if (size > MAX_ATT_SIZE_MB * 1024 * 1024) {
-        ElMessage({
-          message: t('attTooLargeMsg', {name: filename, size: MAX_ATT_SIZE_MB}),
-          type: 'error',
-          plain: true,
-        })
-        continue
-      }
-
-      const currentTotal = form.attachments.reduce((sum, att) => sum + (att.size || 0), 0)
-
-      if (currentTotal + size > MAX_ATT_TOTAL_SIZE_MB * 1024 * 1024) {
-        ElMessage({
-          message: t('attTotalTooLargeMsg', {size: MAX_ATT_TOTAL_SIZE_MB}),
-          type: 'error',
-          plain: true,
-        })
+      const violation = getSendLimitViolation({attachmentSizes: currentAttachmentSizes(size)})
+      if (violation) {
+        showSendLimitViolation(violation, filename)
+        if (violation.type === 'attachment-size') continue
         break
       }
 
@@ -342,6 +375,17 @@ async function sendEmail() {
       type: 'error',
       plain: true,
     })
+    return
+  }
+
+  const limitViolation = getSendLimitViolation({
+    recipientCount: form.receiveEmail.length,
+    attachmentSizes: currentAttachmentSizes(),
+    content: form.content,
+    text: form.text
+  })
+  if (limitViolation) {
+    showSendLimitViolation(limitViolation)
     return
   }
 

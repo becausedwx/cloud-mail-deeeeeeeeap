@@ -296,10 +296,16 @@ const attService = {
 
 		await orm(c).insert(att).values(attDataList).run();
 
-		for (const att of objectByKey.values()) {
-			await r2Service.putObj(c, att.key, att.buff, {
-				contentType: att.mimeType
-			});
+		try {
+			for (const att of objectByKey.values()) {
+				await r2Service.putObj(c, att.key, att.buff, {
+					contentType: att.mimeType
+				});
+			}
+		} finally {
+			for (const att of attList) {
+				delete att.buff;
+			}
 		}
 
 	},

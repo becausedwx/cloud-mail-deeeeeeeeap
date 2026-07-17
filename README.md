@@ -318,7 +318,7 @@ curl -X POST "https://mail.example.com/api/public/sendEmail" \
 
 附件 `content` 支持标准 Base64，也兼容 `data:*;base64,...`。文件名会去除路径和控制字符；`contentType` 缺失或不合法时使用 `application/octet-stream`。公开调用方传入的 `path`、`url`、`key`、`contentId`、`disposition`、`size` 等字段不会进入核心发件对象，附件仍通过受保护的下载接口访问。
 
-稳定性限制：每次最多 10 个收件人和 10 个附件；单附件解码后最大 10 MiB，附件解码后合计最大 16 MiB；同步 JSON 请求体最大 24 MiB；HTML `content` 最大 1 MB；不支持回复模式；整个部署每小时最多调用 100 次。站外发信还受实际通道限制：Cloudflare Email 整封邮件最大 5 MiB，Resend 整封邮件（附件 Base64 编码后）最大 40 MB，接口会在落库和调用供应商前明确拒绝超限邮件。发件开关、账号归属、角色权限、域名权限和发送额度仍由现有发件链路统一校验。
+稳定性限制：`POST /api/email/send` 与 `POST /api/public/sendEmail` 共用同一套有界 JSON 读取和输入规范化。每次最多 10 个收件人和 10 个附件；单附件解码后最大 10 MiB，附件解码后合计最大 16 MiB；同步 JSON 请求体最大 24 MiB；HTML `content` 与纯文本 `text` 的 UTF-8 大小合计最大 1 MiB。公开接口不支持回复模式，且整个部署每小时最多调用 100 次。所有格式、收件人和大小校验都会在邮件、附件或对象写入前完成。站外发信还受实际通道限制：Cloudflare Email 整封邮件最大 5 MiB，Resend 整封邮件（附件 Base64 编码后）最大 40 MB，接口会在落库和调用供应商前明确拒绝超限邮件。发件开关、账号归属、角色权限、域名权限和发送额度仍由现有发件链路统一校验。
 
 | `code` | 含义 |
 | --- | --- |

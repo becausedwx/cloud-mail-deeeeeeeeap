@@ -3,6 +3,7 @@ import emailService from '../service/email-service';
 import result from '../model/result';
 import userContext from '../security/user-context';
 import attService from '../service/att-service';
+import { normalizeSendRequest, readBoundedSendJson } from '../utils/send-request-utils';
 
 app.get('/email/list', async (c) => {
 	const data = await emailService.list(c, c.req.query(), userContext.getUserId(c));
@@ -34,7 +35,8 @@ app.get('/email/attList', async (c) => {
 });
 
 app.post('/email/send', async (c) => {
-	const email = await emailService.send(c, await c.req.json(), userContext.getUserId(c));
+	const params = normalizeSendRequest(await readBoundedSendJson(c));
+	const email = await emailService.send(c, params, userContext.getUserId(c));
 	return c.json(result.ok(email));
 });
 
