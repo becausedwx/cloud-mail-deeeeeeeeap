@@ -2,6 +2,7 @@ import { isDel, userConst } from '../const/entity-const';
 
 const REQUIRED_TABLES = [
 	'email_search',
+	'public_send_rate_limit',
 	'oauth',
 	'setting',
 	'verify_record',

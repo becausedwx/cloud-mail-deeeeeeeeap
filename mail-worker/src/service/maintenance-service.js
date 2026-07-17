@@ -241,6 +241,7 @@ const maintenanceService = {
 		if (action === 'schema') {
 			await dbInit.v3_0DB(c);
 			await dbInit.v3_1DB(c);
+			await dbInit.v3_2DB(c);
 			return this.health(c);
 		}
 

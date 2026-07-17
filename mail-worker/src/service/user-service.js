@@ -313,14 +313,6 @@ const userService = {
 
 	},
 
-	async incrUserSendCount(c, quantity, userId) {
-		await orm(c).update(user).set({
-			sendCount: sql`${user.sendCount}
-	  +
-	  ${quantity}`
-		}).where(eq(user.userId, userId)).run();
-	},
-
 	async updateAllUserType(c, type, curType) {
 		await orm(c)
 			.update(user)

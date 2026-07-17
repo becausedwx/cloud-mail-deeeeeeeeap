@@ -304,7 +304,7 @@ const emailService = {
 	},
 
 	//邮件发送
-	async send(c, params, userId) {
+	async send(c, params, userId, options = {}) {
 
 		let {
 			accountId, //发送账号id
@@ -442,6 +442,12 @@ const emailService = {
 			});
 		}
 
+		if (typeof options.beforePersist === 'function') {
+			await options.beforePersist();
+		}
+
+		await this.reserveSendQuota(c, { userRow, roleRow, quantity: receiveEmail.length });
+
 		imageDataList = imageDataList.map(item => ({...item, contentId: `<${item.contentId}>`}))
 
 		//把图片标签cid标签切换会通用url
@@ -520,7 +526,7 @@ const emailService = {
 			await this.HandleOnSiteEmail(c, receiveEmail, emailResult, attList);
 		}
 
-		runInBackground(c, () => this.recordSendMetrics(c, { roleRow, receiveEmail, userId }));
+		runInBackground(c, () => this.recordSendMetrics(c, { receiveEmail }));
 
 		return [ emailResult ];
 	},
@@ -533,6 +539,51 @@ const emailService = {
 		if (!params.useCloudflareEmail && estimatedBytes > RESEND_MAX_MESSAGE_BYTES) {
 			throw new BizError('Resend message exceeds 40 MB limit', 413);
 		}
+	},
+
+	async reserveSendQuota(c, { userRow, roleRow, quantity }) {
+		if (emailUtils.isSameAddress(userRow.email, c.env.admin)
+			|| !roleRow.sendCount
+			|| !['day', 'count'].includes(roleRow.sendType)) {
+			return;
+		}
+
+		const result = await c.env.db.prepare(`
+			UPDATE user
+			SET send_count = COALESCE(CAST(send_count AS INTEGER), 0) + ?
+			WHERE user_id = ?
+			  AND is_del = ?
+			  AND type = ?
+			  AND EXISTS (
+				SELECT 1
+				FROM role
+				WHERE role.role_id = user.type
+				  AND role.role_id = ?
+				  AND role.send_type = ?
+				  AND CAST(role.send_count AS INTEGER) = ?
+				  AND CAST(role.send_count AS INTEGER) > 0
+				  AND COALESCE(CAST(user.send_count AS INTEGER), 0) + ?
+					<= CAST(role.send_count AS INTEGER)
+			  )
+		`).bind(
+			quantity,
+			userRow.userId,
+			isDel.NORMAL,
+			roleRow.roleId,
+			roleRow.roleId,
+			roleRow.sendType,
+			roleRow.sendCount,
+			quantity
+		).run();
+
+		if (Number(result?.meta?.changes || 0) === 1) {
+			return;
+		}
+
+		if (roleRow.sendType === 'day') {
+			throw new BizError(t(quantity > 1 ? 'daySendLack' : 'daySendLimit'), 403);
+		}
+		throw new BizError(t(quantity > 1 ? 'totalSendLack' : 'totalSendLimit'), 403);
 	},
 
 	async sendExternalProvider(c, params) {
@@ -584,12 +635,8 @@ const emailService = {
 		}
 	},
 
-	async recordSendMetrics(c, { roleRow, receiveEmail, userId }) {
+	async recordSendMetrics(c, { receiveEmail }) {
 		try {
-			if (roleRow.sendCount && roleRow.sendType !== 'internal') {
-				await userService.incrUserSendCount(c, receiveEmail.length, userId);
-			}
-
 			const dateStr = dayjs().format('YYYY-MM-DD');
 			let daySendTotal = await c.env.kv.get(kvConst.SEND_DAY_COUNT + dateStr);
 

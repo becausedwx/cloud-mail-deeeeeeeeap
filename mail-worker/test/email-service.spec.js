@@ -99,10 +99,7 @@ vi.mock('../src/service/role-service', () => ({
 
 vi.mock('../src/service/user-service', () => ({
 	default: {
-		selectById: vi.fn(async () => mockState.userRow),
-		incrUserSendCount: vi.fn(async () => {
-			mockState.operationLog.push({ type: 'incrUserSendCount' });
-		})
+		selectById: vi.fn(async () => mockState.userRow)
 	}
 }));
 
@@ -129,7 +126,7 @@ const { default: emailSearchService } = await import('../src/service/email-searc
 const { default: attService } = await import('../src/service/att-service');
 const { default: emailService } = await import('../src/service/email-service');
 
-function createDbRecorder(selectRows = []) {
+function createDbRecorder(selectRows = [], onRun = null) {
 	const statements = [];
 	return {
 		statements,
@@ -146,6 +143,9 @@ function createDbRecorder(selectRows = []) {
 						return { results: selectRows };
 					},
 					async run() {
+						if (onRun) {
+							return onRun(this);
+						}
 						return { success: true };
 					}
 				};
@@ -472,5 +472,54 @@ describe('email service status synchronization', () => {
 			status: emailConst.status.FAILED,
 			message: 'object upload failed'
 		});
+	});
+
+	it('keeps an atomically reserved send attempt counted when local storage fails', async () => {
+		let reservedCount = 0;
+		const recorder = createDbRecorder([], statement => {
+			if (statement.sql.includes('UPDATE user') && statement.sql.includes('SET send_count')) {
+				reservedCount += statement.bindings[0];
+				return { success: true, meta: { changes: 1 } };
+			}
+			return { success: true };
+		});
+		const sendMock = vi.fn();
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				db: recorder.db,
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+		mockState.roleRow = {
+			roleId: 1,
+			sendType: 'count',
+			sendCount: 2,
+			availDomain: ''
+		};
+		attService.saveSendAtt.mockRejectedValueOnce(new Error('object upload failed'));
+
+		await expect(emailService.send(c, {
+			accountId: 1,
+			name: 'Sender',
+			receiveEmail: ['to@external.example.com'],
+			text: 'Hello',
+			content: '<p>Hello</p>',
+			subject: 'Hello',
+			attachments: [{
+				filename: 'hello.txt',
+				contentType: 'text/plain',
+				content: 'YQ=='
+			}]
+		}, 1)).rejects.toThrow('object upload failed');
+
+		expect(reservedCount).toBe(1);
+		expect(recorder.statements.filter(statement => statement.sql.includes('UPDATE user')))
+			.toHaveLength(1);
+		expect(sendMock).not.toHaveBeenCalled();
 	});
 });

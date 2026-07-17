@@ -19,6 +19,7 @@ import dayjs from 'dayjs';
 import { toUtc } from '../utils/date-uitil';
 import { t } from '../i18n/i18n.js';
 import verifyRecordService from './verify-record-service';
+import reqUtils from '../utils/req-utils';
 
 const loginService = {
 
@@ -130,15 +131,71 @@ const loginService = {
 		}
 
 		const { salt, hash } = await saltHashUtils.hashPassword(password);
-
-		const userId = await userService.insert(c, { email, regKeyId,password: hash, salt, type: type || defType });
-
-		await accountService.insert(c, { userId: userId, email, name: emailUtils.getName(email) });
-
-		await userService.updateUserInfo(c, userId, true);
+		const roleId = type || defType;
+		let regKeyReserved = false;
 
 		if (regKey !== settingConst.regKey.CLOSE && type) {
-			await regKeyService.reduceCount(c, code, 1);
+			regKeyReserved = await regKeyService.reserveCount(c, {
+				regKeyId,
+				roleId: type,
+				quantity: 1
+			});
+			if (!regKeyReserved) {
+				throw new BizError(t('noRegKeyCount'), 400);
+			}
+		}
+
+		const activeIp = reqUtils.getIp(c) || '';
+		const { os = '', browser = '', device = '' } = reqUtils.getUserAgent(c);
+		const activeTime = dayjs().format('YYYY-MM-DD HH:mm:ss');
+
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`
+					INSERT INTO user (
+						email, password, salt, type, reg_key_id,
+						os, browser, active_ip, create_ip, device, active_time
+					)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`).bind(
+					email,
+					hash,
+					salt,
+					roleId,
+					regKeyId,
+					os,
+					browser,
+					activeIp,
+					activeIp,
+					device,
+					activeTime
+				),
+				c.env.db.prepare(`
+					INSERT INTO account (email, name, user_id)
+					VALUES (
+						?,
+						?,
+						(
+							SELECT user_id
+							FROM user
+							WHERE email COLLATE NOCASE = ?
+							  AND password = ?
+							  AND salt = ?
+							ORDER BY user_id DESC
+							LIMIT 1
+						)
+					)
+				`).bind(email, emailUtils.getName(email), email, hash, salt)
+			]);
+		} catch (e) {
+			if (regKeyReserved) {
+				try {
+					await regKeyService.restoreCount(c, regKeyId, 1);
+				} catch (restoreError) {
+					console.error('Failed to restore registration key reservation');
+				}
+			}
+			throw e;
 		}
 
 		if (registerVerify === settingConst.registerVerify.COUNT && !regVerifyOpen) {

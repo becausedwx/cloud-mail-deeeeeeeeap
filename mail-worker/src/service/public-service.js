@@ -74,13 +74,6 @@ const publicService = {
 			throw new BizError('sender account not found', 404);
 		}
 
-		const rateLimitKey = `public_send_limit:${dayjs().format('YYYYMMDDHH')}`;
-		const sendCount = Number(await c.env.kv.get(rateLimitKey)) || 0;
-		if (sendCount >= PUBLIC_SEND_HOURLY_LIMIT) {
-			throw new BizError('send rate limit exceeded', 429);
-		}
-		await c.env.kv.put(rateLimitKey, String(sendCount + 1), { expirationTtl: 3700 });
-
 		return emailService.send(c, {
 			accountId: accountRow.accountId,
 			name: params.name,
@@ -89,7 +82,24 @@ const publicService = {
 			content: content || text,
 			subject,
 			attachments
-		}, accountRow.userId);
+		}, accountRow.userId, {
+			beforePersist: () => this.reserveHourlySend(c)
+		});
+	},
+
+	async reserveHourlySend(c) {
+		const windowHour = Math.floor(Date.now() / 3600000);
+		const result = await c.env.db.prepare(`
+			INSERT INTO public_send_rate_limit (window_hour, count)
+			VALUES (?, 1)
+			ON CONFLICT(window_hour) DO UPDATE
+			SET count = public_send_rate_limit.count + 1
+			WHERE public_send_rate_limit.count < ?
+		`).bind(windowHour, PUBLIC_SEND_HOURLY_LIMIT).run();
+
+		if (Number(result?.meta?.changes || 0) !== 1) {
+			throw new BizError('send rate limit exceeded', 429);
+		}
 	},
 
 	async emailList(c, params) {

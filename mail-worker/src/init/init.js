@@ -36,6 +36,7 @@ const dbInit = {
 		await this.v2_9DB(c);
 		await this.v3_0DB(c);
 		await this.v3_1DB(c);
+		await this.v3_2DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -136,6 +137,15 @@ const dbInit = {
 		];
 
 		await this.runOptionalSqlList(c, queryList);
+	},
+
+	async v3_2DB(c) {
+		await c.env.db.prepare(`
+			CREATE TABLE IF NOT EXISTS public_send_rate_limit (
+				window_hour INTEGER PRIMARY KEY,
+				count INTEGER NOT NULL DEFAULT 0 CHECK (count >= 0)
+			)
+		`).run();
 	},
 
 	async v3_0DB(c) {

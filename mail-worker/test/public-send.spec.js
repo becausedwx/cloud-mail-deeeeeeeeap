@@ -1,9 +1,9 @@
 import { env, SELF } from 'cloudflare:test';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import dayjs from 'dayjs';
 import KvConst from '../src/const/kv-const';
 import settingService from '../src/service/setting-service';
 import publicService from '../src/service/public-service';
+import roleService from '../src/service/role-service';
 
 const PUBLIC_TOKEN = 'public-send-test-token';
 const PDF_BASE64 = 'JVBERi0xLjQK';
@@ -11,10 +11,6 @@ const PDF_BASE64 = 'JVBERi0xLjQK';
 function base64ForDecodedSize(size) {
 	const padding = (3 - size % 3) % 3;
 	return 'A'.repeat(Math.ceil(size / 3) * 4 - padding) + '='.repeat(padding);
-}
-
-function rateLimitKey() {
-	return `public_send_limit:${dayjs().format('YYYYMMDDHH')}`;
 }
 
 function validPayload(overrides = {}) {
@@ -63,6 +59,7 @@ async function seedInternalAccounts() {
 			VALUES (202, 'recipient@example.com', 'Recipient', 0, 102, 0, 0, 0)
 		`)
 	]);
+	roleService.clearCache();
 }
 
 async function setSendStatus(value) {
@@ -92,7 +89,7 @@ describe('public send email API', () => {
 
 	beforeEach(async () => {
 		await env.kv.put(KvConst.PUBLIC_KEY, PUBLIC_TOKEN);
-		await env.kv.delete(rateLimitKey());
+		await env.db.prepare('DELETE FROM public_send_rate_limit').run();
 	});
 
 	it.each([
@@ -170,7 +167,10 @@ describe('public send email API', () => {
 
 	it('rejects a sender after the hourly public limit is reached', async () => {
 		await seedInternalAccounts();
-		await env.kv.put(rateLimitKey(), '100');
+		await env.db.prepare(`
+			INSERT INTO public_send_rate_limit (window_hour, count)
+			VALUES (?, 100)
+		`).bind(Math.floor(Date.now() / 3600000)).run();
 
 		const response = await sendEmail(validPayload());
 		const body = await response.json();
@@ -179,6 +179,22 @@ describe('public send email API', () => {
 			code: 429,
 			message: 'send rate limit exceeded'
 		});
+	});
+
+	it('atomically caps concurrent hourly reservations at 100', async () => {
+		const results = await Promise.all(Array.from({ length: 120 }, () => (
+			publicService.reserveHourlySend({ env })
+				.then(() => 200)
+				.catch(error => error.code)
+		)));
+
+		expect(results.filter(code => code === 200)).toHaveLength(100);
+		expect(results.filter(code => code === 429)).toHaveLength(20);
+		expect(await env.db.prepare(`
+			SELECT count
+			FROM public_send_rate_limit
+			WHERE window_hour = ?
+		`).bind(Math.floor(Date.now() / 3600000)).first()).toMatchObject({ count: 100 });
 	});
 
 	it.each([
@@ -211,7 +227,8 @@ describe('public send email API', () => {
 		});
 		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM email').first()).toMatchObject({ count: 0 });
 		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM attachments').first()).toMatchObject({ count: 0 });
-		expect(await env.kv.get(rateLimitKey())).toBeNull();
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM public_send_rate_limit').first())
+			.toMatchObject({ count: 0 });
 	});
 
 	it('keeps requests without attachments backward compatible', async () => {
@@ -304,7 +321,11 @@ describe('public send email API', () => {
 
 		expect(body.code).toBe(200);
 		expect(body.data).toHaveLength(1);
-		expect(await env.kv.get(rateLimitKey())).toBe('1');
+		expect(await env.db.prepare(`
+			SELECT count
+			FROM public_send_rate_limit
+			WHERE window_hour = ?
+		`).bind(Math.floor(Date.now() / 3600000)).first()).toMatchObject({ count: 1 });
 
 		const { results: rows } = await env.db.prepare(`
 			SELECT email_id AS emailId,
@@ -363,6 +384,66 @@ describe('public send email API', () => {
 		expect(new Uint8Array(await env.kv.get(attachmentRows[0].key, { type: 'arrayBuffer' })))
 			.toEqual(new TextEncoder().encode('%PDF-1.4\n'));
 	});
+
+	it('atomically caps concurrent sends at the role recipient quota', async () => {
+		await seedInternalAccounts();
+		await setSendStatus(0);
+		await env.db.prepare(`
+			UPDATE role
+			SET send_type = 'count', send_count = 3
+			WHERE role_id = 1
+		`).run();
+		roleService.clearCache();
+
+		const responses = await Promise.all(Array.from({ length: 8 }, (_, index) => (
+			sendEmail(validPayload({ subject: `Concurrent send ${index}` }))
+		)));
+		const bodies = await Promise.all(responses.map(response => response.json()));
+
+		expect(bodies.filter(body => body.code === 200)).toHaveLength(3);
+		expect(bodies.filter(body => body.code === 403)).toHaveLength(5);
+		expect(await env.db.prepare(`
+			SELECT send_count AS sendCount
+			FROM user
+			WHERE user_id = 101
+		`).first()).toMatchObject({ sendCount: 3 });
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM email').first())
+			.toMatchObject({ count: 6 });
+	});
+
+	it('does not reserve public or user quota when provider size preflight fails', async () => {
+		await seedInternalAccounts();
+		await setSendStatus(0);
+		await env.db.prepare(`
+			UPDATE role
+			SET send_type = 'count', send_count = 3
+			WHERE role_id = 1
+		`).run();
+		roleService.clearCache();
+
+		const response = await sendEmail(validPayload({
+			receiveEmail: ['outside@example.net'],
+			attachments: [{
+				filename: 'provider-too-large.bin',
+				content: base64ForDecodedSize(4 * 1024 * 1024)
+			}]
+		}));
+		const body = await response.json();
+
+		expect(body).toMatchObject({
+			code: 413,
+			message: 'Cloudflare Email message exceeds 5 MiB limit'
+		});
+		expect(await env.db.prepare(`
+			SELECT send_count AS sendCount
+			FROM user
+			WHERE user_id = 101
+		`).first()).toMatchObject({ sendCount: 0 });
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM public_send_rate_limit').first())
+			.toMatchObject({ count: 0 });
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM email').first())
+			.toMatchObject({ count: 0 });
+	}, 20000);
 
 	it('normalizes data URL attachments and ignores privileged fields', async () => {
 		await seedInternalAccounts();

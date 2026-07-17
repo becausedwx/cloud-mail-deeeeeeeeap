@@ -88,12 +88,35 @@ const regKeyService = {
 		return regKeyList;
 	},
 
-	async reduceCount(c, code, count) {
-		await orm(c).update(regKey).set({
-			count: sql`${regKey.count}
-	  -
-	  ${count}`
-		}).where(eq(regKey.code, code)).run();
+	async reserveCount(c, { regKeyId, roleId, quantity = 1 }) {
+		quantity = Number(quantity);
+		if (!Number.isInteger(quantity) || quantity <= 0) {
+			throw new BizError('Invalid registration key quantity', 400);
+		}
+
+		const result = await c.env.db.prepare(`
+			UPDATE reg_key
+			SET count = count - ?
+			WHERE rege_key_id = ?
+			  AND role_id = ?
+			  AND count >= ?
+			  AND date(expire_time, '+8 hours') >= date('now', '+8 hours')
+		`).bind(quantity, regKeyId, roleId, quantity).run();
+
+		return Number(result?.meta?.changes || 0) === 1;
+	},
+
+	async restoreCount(c, regKeyId, quantity = 1) {
+		quantity = Number(quantity);
+		if (!Number.isInteger(quantity) || quantity <= 0) {
+			throw new BizError('Invalid registration key quantity', 400);
+		}
+
+		await c.env.db.prepare(`
+			UPDATE reg_key
+			SET count = count + ?
+			WHERE rege_key_id = ?
+		`).bind(quantity, regKeyId).run();
 	},
 
 	async history(c, params) {
