@@ -34,7 +34,8 @@ const REQUIRED_INDEXES = [
 	'idx_delivery_attempt_provider_message',
 	'idx_resend_webhook_event_key',
 	'idx_resend_webhook_event_status_time',
-	'idx_resend_webhook_event_provider_email'
+	'idx_resend_webhook_event_provider_email',
+	'idx_verify_record_ip_type'
 ];
 
 const REQUIRED_UNIQUE_INDEXES = {
@@ -45,6 +46,13 @@ const REQUIRED_UNIQUE_INDEXES = {
 	],
 	resendWebhookEvent: ['idx_resend_webhook_event_key']
 };
+
+export const BOOTSTRAP_STATUS_CACHE_TTL_MS = 15_000;
+export const BOOTSTRAP_STATUS_CHECK_VERSION = 'bootstrap-v3.8-verify-record-index';
+
+const readyCacheByDb = new WeakMap();
+const inFlightByDb = new WeakMap();
+const cacheEpochByDb = new WeakMap();
 
 const REQUIRED_COLUMNS = {
 	email: ['attachment_count', 'recovery_after'],
@@ -94,7 +102,36 @@ function hasDomainConfig(value) {
 	}
 }
 
-export async function getBootstrapStatus(c) {
+function cacheKeyFor(c, version) {
+	const env = c.env || {};
+	const admin = typeof env.admin === 'string' ? env.admin.trim().toLowerCase() : '';
+	return JSON.stringify([
+		version,
+		hasDomainConfig(env.domain),
+		admin,
+		!!env.kv,
+		!!env.assets,
+		hasText(env.jwt_secret)
+	]);
+}
+
+function cloneStatus(status) {
+	return {
+		...status,
+		bindings: { ...status.bindings },
+		configuration: { ...status.configuration }
+	};
+}
+
+export function invalidateBootstrapStatusCache(target) {
+	const db = target?.env?.db || target;
+	if (!db || (typeof db !== 'object' && typeof db !== 'function')) return;
+	cacheEpochByDb.set(db, (cacheEpochByDb.get(db) || 0) + 1);
+	readyCacheByDb.delete(db);
+	inFlightByDb.delete(db);
+}
+
+async function computeBootstrapStatus(c) {
 	const bindings = {
 		d1: !!c.env?.db,
 		kv: !!c.env?.kv,
@@ -122,23 +159,23 @@ export async function getBootstrapStatus(c) {
 				resendWebhookEventColumnRows,
 				deliveryAttemptIndexRows,
 				resendWebhookEventIndexRows
-			] = await Promise.all([
+			] = await c.env.db.batch([
 				c.env.db.prepare(`
 					SELECT name
 					FROM sqlite_master
 					WHERE type = 'table' AND name IN (${tablePlaceholders})
-				`).bind(...REQUIRED_TABLES).all(),
+				`).bind(...REQUIRED_TABLES),
 				c.env.db.prepare(`
 					SELECT name
 					FROM sqlite_master
 					WHERE type = 'index' AND name IN (${indexPlaceholders})
-				`).bind(...REQUIRED_INDEXES).all(),
-				c.env.db.prepare('PRAGMA table_info(email)').all(),
-				c.env.db.prepare('PRAGMA table_info(attachments)').all(),
-				c.env.db.prepare('PRAGMA table_info(delivery_attempt)').all(),
-				c.env.db.prepare('PRAGMA table_info(resend_webhook_event)').all(),
-				c.env.db.prepare('PRAGMA index_list(delivery_attempt)').all(),
-				c.env.db.prepare('PRAGMA index_list(resend_webhook_event)').all()
+				`).bind(...REQUIRED_INDEXES),
+				c.env.db.prepare('PRAGMA table_info(email)'),
+				c.env.db.prepare('PRAGMA table_info(attachments)'),
+				c.env.db.prepare('PRAGMA table_info(delivery_attempt)'),
+				c.env.db.prepare('PRAGMA table_info(resend_webhook_event)'),
+				c.env.db.prepare('PRAGMA index_list(delivery_attempt)'),
+				c.env.db.prepare('PRAGMA index_list(resend_webhook_event)')
 			]);
 			const tableNames = new Set((tableRows.results || []).map(row => row.name));
 			const indexNames = new Set((indexRows.results || []).map(row => row.name));
@@ -176,26 +213,34 @@ export async function getBootstrapStatus(c) {
 				&& hasRequiredUniqueIndexes;
 
 			if (schemaReady) {
-				initialized = !!await c.env.db.prepare('SELECT 1 AS initialized FROM setting LIMIT 1').first();
-				if (initialized && configuration.admin) {
-					adminCreated = !!await c.env.db.prepare(`
-						SELECT 1 AS created
-						FROM user u
-						JOIN account a
-						  ON a.user_id = u.user_id
-						 AND a.email COLLATE NOCASE = u.email
-						WHERE u.email COLLATE NOCASE = ?
-						  AND u.is_del = ?
-						  AND u.status = ?
-						  AND a.is_del = ?
-						LIMIT 1
-					`).bind(
-						c.env.admin.trim(),
-						isDel.NORMAL,
-						userConst.status.NORMAL,
-						isDel.NORMAL
-					).first();
-				}
+				const adminEmail = configuration.admin ? c.env.admin.trim() : '';
+				const bootstrapRow = await c.env.db.prepare(`
+					WITH bootstrap AS (
+						SELECT EXISTS(SELECT 1 FROM setting LIMIT 1) AS initialized
+					)
+					SELECT initialized,
+						CASE WHEN initialized = 1 AND ? <> '' THEN EXISTS(
+							SELECT 1
+							FROM user u
+							JOIN account a
+							  ON a.user_id = u.user_id
+							 AND a.email COLLATE NOCASE = u.email
+							WHERE u.email COLLATE NOCASE = ?
+							  AND u.is_del = ?
+							  AND u.status = ?
+							  AND a.is_del = ?
+							LIMIT 1
+						) ELSE 0 END AS adminCreated
+					FROM bootstrap
+				`).bind(
+					adminEmail,
+					adminEmail,
+					isDel.NORMAL,
+					userConst.status.NORMAL,
+					isDel.NORMAL
+				).first();
+				initialized = Number(bootstrapRow?.initialized) === 1;
+				adminCreated = Number(bootstrapRow?.adminCreated) === 1;
 			}
 		} catch (error) {
 			console.warn(`Unable to check database initialization status: ${error.message}`);
@@ -216,6 +261,57 @@ export async function getBootstrapStatus(c) {
 		bindings,
 		configuration
 	};
+}
+
+export async function getBootstrapStatus(c, options = {}) {
+	const db = c.env?.db;
+	if (!db || (typeof db !== 'object' && typeof db !== 'function')) {
+		return computeBootstrapStatus(c);
+	}
+
+	const version = options.version || BOOTSTRAP_STATUS_CHECK_VERSION;
+	const now = options.now || (() => Date.now());
+	const ttlMs = Number.isFinite(options.ttlMs)
+		? Math.max(0, options.ttlMs)
+		: BOOTSTRAP_STATUS_CACHE_TTL_MS;
+	const key = cacheKeyFor(c, version);
+	const epoch = cacheEpochByDb.get(db) || 0;
+	const cache = readyCacheByDb.get(db);
+	const cached = cache?.get(key);
+	if (cached
+		&& cached.version === version
+		&& cached.epoch === epoch
+		&& cached.expiresAt > now()) {
+		return cloneStatus(cached.status);
+	}
+	if (cached) cache.delete(key);
+
+	const inFlight = inFlightByDb.get(db);
+	const pending = inFlight?.get(key);
+	if (pending?.epoch === epoch) {
+		return cloneStatus(await pending.promise);
+	}
+
+	const promise = computeBootstrapStatus(c);
+	const entry = { epoch, promise };
+	if (!inFlightByDb.has(db)) inFlightByDb.set(db, new Map());
+	inFlightByDb.get(db).set(key, entry);
+	try {
+		const status = await promise;
+		if (status.ready && (cacheEpochByDb.get(db) || 0) === epoch) {
+			if (!readyCacheByDb.has(db)) readyCacheByDb.set(db, new Map());
+			readyCacheByDb.get(db).set(key, {
+				version,
+				epoch,
+				expiresAt: now() + ttlMs,
+				status: cloneStatus(status)
+			});
+		}
+		return cloneStatus(status);
+	} finally {
+		const current = inFlightByDb.get(db);
+		if (current?.get(key) === entry) current.delete(key);
+	}
 }
 
 export function createBootstrapWebsiteConfig(status) {

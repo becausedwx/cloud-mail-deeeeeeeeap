@@ -511,6 +511,14 @@
             fit="cover"
             :src="backgroundImage"
         ></el-image>
+        <div class="dialog-tip" v-if="localUpShow">
+          {{ $t('backgroundUploadHint', {
+            size: backgroundFileSize,
+            max: formatBytes(BACKGROUND_IMAGE_LIMITS.maxOutputBytes),
+            width: BACKGROUND_IMAGE_LIMITS.maxWidth,
+            height: BACKGROUND_IMAGE_LIMITS.maxHeight
+          }) }}
+        </div>
         <div class="cut-button">
           <el-button type="primary" link @click="openCut" v-if="!localUpShow">
             {{ $t('localUpload') }}
@@ -827,7 +835,12 @@ import {debounce} from '@/utils/debounce.js'
 import {isDomain, isEmail} from "@/utils/verify-utils.js";
 import loading from "@/components/loading/index.vue";
 import {getTextWidth} from "@/utils/text.js";
-import {fileToBase64} from "@/utils/file-utils.js"
+import {fileToBase64, formatBytes} from "@/utils/file-utils.js"
+import {
+  BACKGROUND_IMAGE_LIMITS,
+  prepareBackgroundImage,
+  validateBackgroundImage
+} from "@/utils/background-image.js";
 import {useI18n} from 'vue-i18n';
 import axios from "axios";
 
@@ -844,6 +857,8 @@ const settingLoadFailed = ref(false)
 const settingReady = ref(false)
 const backgroundImage = ref('')
 const localUpShow = ref(false)
+const backgroundFile = ref(null)
+const backgroundFileSize = computed(() => backgroundFile.value?.size ? formatBytes(backgroundFile.value.size) : '')
 const accountStore = useAccountStore();
 const userStore = useUserStore();
 const editTitleShow = ref(false)
@@ -869,7 +884,6 @@ const loginOpacity = ref(0)
 const minEmailPrefix = ref(0)
 const emailPrefixFilter = ref([])
 const backgroundUrl = ref('')
-let backgroundFile = {}
 const showSetBackground = ref(false)
 let regVerifyCount = ref(1)
 let addVerifyCount = ref(1)
@@ -1068,7 +1082,11 @@ const compareByLengthAndUpperCase = (a, b, key) => {
 
 
 function closedSetBackground() {
+  if (backgroundImage.value.startsWith('blob:')) {
+    URL.revokeObjectURL(backgroundImage.value)
+  }
   backgroundImage.value = ''
+  backgroundFile.value = null
   localUpShow.value = false
   backgroundUrl.value = setting.value.background?.startsWith('http') ? setting.value.background : ''
 }
@@ -1400,38 +1418,55 @@ function clearTurnstileKey(key) {
 }
 
 async function saveBackground() {
-
-  let image = ''
-
-  if (localUpShow.value) {
-    image = await fileToBase64(backgroundFile, true);
-  } else {
-    if (backgroundUrl.value && !backgroundUrl.value.startsWith('http')) {
-      ElMessage({
-        message: t('imageLinkErrorMsg'),
-        type: "error",
-        plain: true
-      })
-      return
-    }
-    image = backgroundUrl.value
-  }
   settingLoading.value = true
 
-  setBackground(image).then(key => {
+  try {
+    let image = ''
+    let preparedFile = null
+
+    if (localUpShow.value) {
+      preparedFile = await prepareBackgroundImage(backgroundFile.value)
+      image = await fileToBase64(preparedFile, true)
+    } else {
+      if (backgroundUrl.value && !backgroundUrl.value.startsWith('http')) {
+        ElMessage({
+          message: t('imageLinkErrorMsg'),
+          type: "error",
+          plain: true
+        })
+        return
+      }
+      image = backgroundUrl.value
+    }
+
+    const key = await setBackground(image)
     setting.value.background = key
     showSetBackground.value = false
     ElMessage({
-      message: t('saveSuccessMsg'),
+      message: preparedFile && preparedFile !== backgroundFile.value
+        ? t('backgroundCompressed', {
+          before: formatBytes(backgroundFile.value.size),
+          after: formatBytes(preparedFile.size)
+        })
+        : t('saveSuccessMsg'),
       type: "success",
       plain: true
     })
-    localUpShow.value = false
-    backgroundImage.value = ''
-  }).finally(() => {
+  } catch (error) {
+    const errorKey = {
+      format: 'backgroundFormatError',
+      empty: 'backgroundFormatError',
+      'source-size': 'backgroundSourceTooLarge',
+      pixels: 'backgroundPixelsTooLarge'
+    }[error?.code] || 'backgroundProcessFailed'
+    ElMessage({
+      message: t(errorKey, {max: formatBytes(BACKGROUND_IMAGE_LIMITS.maxSourceBytes)}),
+      type: 'error',
+      plain: true
+    })
+  } finally {
     settingLoading.value = false
-  })
-
+  }
 }
 
 function openSetBackground() {
@@ -1441,13 +1476,31 @@ function openSetBackground() {
 function openCut() {
   const doc = document.createElement('input')
   doc.setAttribute('type', 'file')
-  doc.setAttribute('accept', 'image/*')
-  doc.click()
-  doc.onchange = async (e) => {
-    backgroundFile = e.target.files[0]
-    backgroundImage.value = URL.createObjectURL(e.target.files[0])
-    localUpShow.value = true
+  doc.setAttribute('accept', '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp')
+  doc.onchange = (e) => {
+    const selectedFile = e.target.files?.[0]
+    if (!selectedFile) return
+
+    try {
+      validateBackgroundImage(selectedFile)
+      if (backgroundImage.value.startsWith('blob:')) {
+        URL.revokeObjectURL(backgroundImage.value)
+      }
+      backgroundFile.value = selectedFile
+      backgroundImage.value = URL.createObjectURL(selectedFile)
+      localUpShow.value = true
+    } catch (error) {
+      const errorKey = error?.code === 'source-size'
+        ? 'backgroundSourceTooLarge'
+        : 'backgroundFormatError'
+      ElMessage({
+        message: t(errorKey, {max: formatBytes(BACKGROUND_IMAGE_LIMITS.maxSourceBytes)}),
+        type: 'error',
+        plain: true
+      })
+    }
   }
+  doc.click()
 }
 
 function saveR2domain() {

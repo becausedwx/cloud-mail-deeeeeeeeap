@@ -242,6 +242,8 @@ try {
 7. 如提示缺字段、缺索引或缺搜索表，按顺序执行「补齐数据库结构」「补齐索引」「重建搜索表」。
 8. 进入系统设置，配置 Resend、公告、验证码识别等业务选项。
 
+Bootstrap readiness 会把同一 Worker isolate 内的 `ready=true` 结果按版本短暂缓存（15 秒），失败或未初始化结果不会缓存；`/api/init`、管理员创建和维护中心结构/索引修复会主动失效该缓存。当前升级还会幂等创建 `idx_verify_record_ip_type`（`verify_record(ip, type)`）索引。旧数据库部署新版本后，仍需通过受保护的 `/api/init` 或维护中心「补齐数据库结构/补齐索引」完成升级；不要直接在生产 D1 手工删除或改写历史数据。
+
 <details>
 <summary><b>从旧 Cloudflare 项目切到本仓库</b></summary>
 

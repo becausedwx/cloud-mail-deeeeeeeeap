@@ -88,6 +88,7 @@ const EXPECTED_INDEXES = [
 	'idx_resend_webhook_event_key',
 	'idx_resend_webhook_event_status_time',
 	'idx_resend_webhook_event_provider_email',
+	'idx_verify_record_ip_type',
 	'idx_email_type_create_time',
 	'idx_user_create_time'
 ];
@@ -115,6 +116,7 @@ const INDEX_SQL_LIST = [
 	`CREATE INDEX IF NOT EXISTS idx_email_account ON email(account_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_star_email ON star(email_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_oauth_user ON oauth(user_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_verify_record_ip_type ON verify_record(ip, type);`,
 	`CREATE INDEX IF NOT EXISTS idx_email_receive_recovery ON email(type, status, create_time, email_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_email_receive_recovery_due ON email(type, status, recovery_after, create_time, email_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_attachments_email_status_key ON attachments(email_id, status, key);`,
@@ -399,6 +401,7 @@ const maintenanceService = {
 		}
 
 		if (action === 'schema') {
+			dbInit.invalidateBootstrapStatus(c);
 			await dbInit.runMigrationSteps([
 				['maintenance-v3.0', () => dbInit.v3_0DB(c)],
 				['maintenance-v3.1', () => dbInit.v3_1DB(c)],
@@ -407,20 +410,25 @@ const maintenanceService = {
 				['maintenance-v3.4', () => dbInit.v3_4DB(c)],
 				['maintenance-v3.5', () => dbInit.v3_5DB(c)],
 				['maintenance-v3.6', () => dbInit.v3_6DB(c)],
-				['maintenance-v3.7', () => dbInit.v3_7DB(c)]
+				['maintenance-v3.7', () => dbInit.v3_7DB(c)],
+				['maintenance-v3.8', () => dbInit.v3_8DB(c)]
 			]);
+			dbInit.invalidateBootstrapStatus(c);
 			await dbInit.assertBootstrapReady(c);
 			return this.health(c);
 		}
 
 		if (action === 'indexes') {
+			dbInit.invalidateBootstrapStatus(c);
 			await dbInit.runMigrationSteps([
 				['maintenance-v3.4', () => dbInit.v3_4DB(c)],
 				['maintenance-v3.5', () => dbInit.v3_5DB(c)],
 				['maintenance-v3.6', () => dbInit.v3_6DB(c)],
 				['maintenance-v3.7', () => dbInit.v3_7DB(c)],
+				['maintenance-v3.8', () => dbInit.v3_8DB(c)],
 				['maintenance-indexes', () => dbInit.runOptionalSqlList(c, INDEX_SQL_LIST)]
 			]);
+			dbInit.invalidateBootstrapStatus(c);
 			await dbInit.assertBootstrapReady(c);
 			return this.health(c);
 		}

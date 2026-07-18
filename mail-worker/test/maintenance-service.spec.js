@@ -10,6 +10,8 @@ vi.mock('../src/init/init', () => ({
 		v3_5DB: vi.fn(),
 		v3_6DB: vi.fn(),
 		v3_7DB: vi.fn(),
+		v3_8DB: vi.fn(),
+		invalidateBootstrapStatus: vi.fn(),
 		runOptionalSqlList: vi.fn(),
 		runMigrationSteps: vi.fn(async steps => {
 			for (const [, operation] of steps) await operation();
@@ -351,7 +353,9 @@ describe('maintenance service', () => {
 		await maintenanceService.repair(c, 'schema');
 
 		expect(dbInit.v3_7DB).toHaveBeenCalledWith(c);
+		expect(dbInit.v3_8DB).toHaveBeenCalledWith(c);
 		expect(dbInit.assertBootstrapReady).toHaveBeenCalledWith(c);
+		expect(dbInit.invalidateBootstrapStatus).toHaveBeenCalledTimes(2);
 	});
 
 	it('rebuilds search table in cursor batches without loading every id at once', async () => {
@@ -404,6 +408,8 @@ describe('maintenance service', () => {
 		expect(sqlList).toContain('idx_star_user_email');
 		expect(sqlList).toContain('idx_email_user_code_id');
 		expect(sqlList).toContain('idx_email_code_id');
+		expect(sqlList).toContain('idx_verify_record_ip_type');
+		expect(dbInit.invalidateBootstrapStatus).toHaveBeenCalledTimes(2);
 	});
 
 	it('cleans false positive verification codes by rescanning existing code rows', async () => {

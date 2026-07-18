@@ -136,7 +136,6 @@ import {
   accountSetAllReceive,
   accountSetAsTop
 } from "@/request/account.js";
-import {sleep} from "@/utils/time-utils.js"
 import {isEmail} from "@/utils/verify-utils.js";
 import {useSettingStore} from "@/store/setting.js";
 import {useAccountStore} from "@/store/account.js";
@@ -145,6 +144,8 @@ import {useUserStore} from "@/store/user.js";
 import {hasPerm} from "@/perm/perm.js"
 import {useI18n} from "vue-i18n";
 import {AccountAllReceiveEnum} from "@/enums/account-enum.js";
+import {getSessionGeneration} from "@/session/auth-session.js";
+import {loadAccountPage} from "@/layout/account/account-list-loader.js";
 
 const {t} = useI18n();
 const userStore = useUserStore();
@@ -169,7 +170,7 @@ let turnstileId = null
 const botJsError = ref(false)
 let verifyToken = ''
 let verifyErrorCount = 0
-let first = true
+let listGeneration = 0
 const addForm = reactive({
   email: '',
   suffix: settingStore.domainList[0]
@@ -334,9 +335,7 @@ function remove(account) {
 }
 
 function refresh() {
-  if (loading.value) {
-    return
-  }
+  listGeneration++
   loading.value = false
   followLoading.value = false
   noLoading.value = false
@@ -403,34 +402,31 @@ function getAccountList() {
     followLoading.value = true
   }
 
-  let start = Date.now();
-
   const accountId = accounts.length > 0 ? accounts.at(-1).accountId : 0;
   const lastSort = accounts.length > 0 ? accounts.at(-1).sort : null;
+  const requestGeneration = listGeneration
+  const sessionGeneration = getSessionGeneration()
 
-  accountList(accountId, queryParams.size, lastSort).then(async list => {
+  return loadAccountPage({
+    request: () => accountList(accountId, queryParams.size, lastSort),
+    isCurrent: () => requestGeneration === listGeneration
+      && sessionGeneration === getSessionGeneration(),
+    onSuccess: list => {
+      if (list.length < queryParams.size) {
+        noLoading.value = true
+      }
+      if (accounts.length === 0 && list.length > 0) {
+        accountStore.currentAccount = list[0]
+      }
 
-    let end = Date.now();
-    let duration = end - start;
-    if (duration < 300) {
-      await sleep(300 - duration)
+      accounts.push(...list)
+      loading.value = false
+      followLoading.value = false
+    },
+    onError: () => {
+      loading.value = false
+      followLoading.value = false
     }
-
-    if (list.length < queryParams.size) {
-      noLoading.value = true
-    }
-    if (accounts.length === 0) {
-      accountStore.currentAccount = list[0]
-    }
-
-    accounts.push(...list)
-
-    loading.value = false
-    followLoading.value = false
-    first = false
-  }).catch(() => {
-    loading.value = false
-    followLoading.value = false
   })
 }
 

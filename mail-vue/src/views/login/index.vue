@@ -1,5 +1,5 @@
 <template>
-  <div id="login-box" :style=" background ? 'background: var(--el-bg-color)' : ''" v-loading="oauthLoading" :element-loading-text="$t('loginLoading')">
+  <div id="login-box" :style="backgroundReady ? 'background: var(--el-bg-color)' : ''" v-loading="oauthLoading" :element-loading-text="$t('loginLoading')">
     <div id="background-wrap" v-if="!settingStore.settings.background">
       <div class="x1 cloud"></div>
       <div class="x2 cloud"></div>
@@ -7,7 +7,7 @@
       <div class="x4 cloud"></div>
       <div class="x5 cloud"></div>
     </div>
-    <div v-else :style="background"></div>
+    <div v-else class="login-background" :class="{'login-background-ready': backgroundReady}" :style="background"></div>
     <div class="form-wrapper">
       <div class="container">
         <span class="form-title">{{ settingStore.settings.title }}</span>
@@ -148,7 +148,7 @@
 
 <script setup>
 import router from "@/router";
-import {computed, nextTick, reactive, ref} from "vue";
+import {computed, nextTick, onMounted, onUnmounted, reactive, ref, watch} from "vue";
 import {login} from "@/request/login.js";
 import {register} from "@/request/login.js";
 import {websiteConfig} from "@/request/setting.js";
@@ -174,6 +174,7 @@ import {
   installDynamicRoutes,
   startAuthSession
 } from "@/session/auth-session.js";
+import {queueLoginBackground} from "@/views/login/login-background.js";
 
 const {t} = useI18n();
 const accountStore = useAccountStore();
@@ -257,15 +258,52 @@ const loginOpacity = computed(() => {
 })
 
 const hideLoginDomain = computed(() => settingStore.settings.loginDomain === 1)
+const loadedBackgroundUrl = ref('')
+const backgroundReady = ref(false)
+let cancelBackgroundLoad = () => {}
+let stopBackgroundWatch = () => {}
 
 const background = computed(() => {
-
-  return settingStore.settings.background ? {
-    'background-image': `url(${cvtR2Url(settingStore.settings.background)})`,
+  return loadedBackgroundUrl.value ? {
+    'background-image': `url(${loadedBackgroundUrl.value})`,
     'background-repeat': 'no-repeat',
     'background-size': 'cover',
     'background-position': 'center'
   } : ''
+})
+
+onMounted(() => {
+  stopBackgroundWatch = watch(() => settingStore.settings.background, value => {
+    cancelBackgroundLoad()
+    loadedBackgroundUrl.value = ''
+    backgroundReady.value = false
+    if (!value) return
+
+    const src = cvtR2Url(value)
+    cancelBackgroundLoad = queueLoginBackground(src, {
+      onReady: decodedSrc => {
+        loadedBackgroundUrl.value = decodedSrc
+        nextTick(() => {
+          const reveal = () => {
+            backgroundReady.value = true
+          }
+          if (typeof globalThis.requestAnimationFrame === 'function') {
+            globalThis.requestAnimationFrame(reveal)
+          } else {
+            globalThis.setTimeout(reveal, 0)
+          }
+        })
+      },
+      onError: error => {
+        console.warn('背景图片加载失败:', error)
+      }
+    })
+  }, {immediate: true})
+})
+
+onUnmounted(() => {
+  stopBackgroundWatch()
+  cancelBackgroundLoad()
 })
 
 const openSelect = () => {
@@ -821,6 +859,24 @@ function submitRegister() {
 #background-wrap {
   height: 100%;
   z-index: 0;
+}
+
+.login-background {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 320ms ease;
+}
+
+.login-background-ready {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-background {
+    transition: none;
+  }
 }
 
 @keyframes animateCloud {

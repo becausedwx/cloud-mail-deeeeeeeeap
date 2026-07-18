@@ -26,6 +26,7 @@ function readyDb({
 	attachmentColumns,
 	includeDeliveryAttempt = false,
 	includeWebhookEvent = false,
+	includeVerifyRecordIndex = true,
 	uniqueDeliveryIndexes = true,
 	uniqueWebhookIndex = true,
 	deliveryAttemptColumns = [
@@ -89,6 +90,9 @@ function readyDb({
 								{ name: 'idx_resend_webhook_event_provider_email' }
 							);
 						}
+						if (includeVerifyRecordIndex) {
+							names.push({ name: 'idx_verify_record_ip_type' });
+						}
 						return { results: names };
 					}
 					if (sql.includes('PRAGMA table_info(email)')) {
@@ -114,9 +118,12 @@ function readyDb({
 					return { results: [] };
 				},
 				async first() {
-					return { initialized: 1, created: 1 };
+					return { initialized: 1, adminCreated: 1, created: 1 };
 				}
 			};
+		},
+		async batch(statements) {
+			return Promise.all(statements.map(statement => statement.all()));
 		}
 	};
 }
@@ -179,6 +186,28 @@ describe('bootstrap schema readiness', () => {
 
 		expect(status.schemaReady).toBe(true);
 		expect(status.ready).toBe(true);
+	});
+
+	it('does not report ready until the verify record lookup index is repaired', async () => {
+		const status = await getBootstrapStatus({
+			env: {
+				db: readyDb({
+					emailColumns: ['email_id', 'attachment_count', 'recovery_after'],
+					attachmentColumns: ['att_id', 'status', 'message'],
+					includeDeliveryAttempt: true,
+					includeWebhookEvent: true,
+					includeVerifyRecordIndex: false
+				}),
+				kv: {},
+				assets: {},
+				domain: ['example.com'],
+				admin: 'admin@example.com',
+				jwt_secret: 'configured'
+			}
+		});
+
+		expect(status.schemaReady).toBe(false);
+		expect(status.ready).toBe(false);
 	});
 
 	it('does not report ready when durable identity indexes are not unique', async () => {

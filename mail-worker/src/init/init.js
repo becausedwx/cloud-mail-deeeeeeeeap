@@ -6,12 +6,16 @@ import { EMAIL_SEARCH_BODY_LIMIT } from '../service/email-search-service';
 import BizError from '../error/biz-error';
 import cryptoUtils from '../utils/crypto-utils';
 import { readBoundedJson } from '../utils/request-body-utils';
-import { getBootstrapStatus } from './status';
+import { getBootstrapStatus, invalidateBootstrapStatusCache } from './status';
 
 export const INIT_SECRET_HEADER = 'X-Cloud-Mail-Init-Secret';
 const ADMIN_BOOTSTRAP_JSON_MAX_BYTES = 32 * 1024;
 
 const dbInit = {
+	invalidateBootstrapStatus(c) {
+		invalidateBootstrapStatusCache(c);
+	},
+
 	async init(c) {
 
 		const secret = c.req.header(INIT_SECRET_HEADER);
@@ -20,6 +24,7 @@ const dbInit = {
 			return c.text('JWT secret mismatch', 401);
 		}
 
+		this.invalidateBootstrapStatus(c);
 		await this.runMigrationSteps([
 			['base-schema', () => this.intDB(c)],
 			['v1.1', () => this.v1_1DB(c)],
@@ -46,8 +51,10 @@ const dbInit = {
 			['v3.5', () => this.v3_5DB(c)],
 			['v3.6', () => this.v3_6DB(c)],
 			['v3.7', () => this.v3_7DB(c)],
+			['v3.8', () => this.v3_8DB(c)],
 			['settings-cache', () => settingService.refresh(c)]
 		]);
+		this.invalidateBootstrapStatus(c);
 		await this.assertBootstrapReady(c, { requireAdmin: false });
 		return c.text('success');
 	},
@@ -164,6 +171,7 @@ const dbInit = {
 			throw new BizError('Administrator account already exists', 409);
 		}
 
+		this.invalidateBootstrapStatus(c);
 		return c.text('success');
 	},
 
@@ -505,6 +513,13 @@ const dbInit = {
 		await c.env.db.prepare(`
 			CREATE INDEX IF NOT EXISTS idx_resend_webhook_event_provider_email
 			ON resend_webhook_event(provider_email_id, received_at)
+		`).run();
+	},
+
+	async v3_8DB(c) {
+		await c.env.db.prepare(`
+			CREATE INDEX IF NOT EXISTS idx_verify_record_ip_type
+			ON verify_record(ip, type)
 		`).run();
 	},
 

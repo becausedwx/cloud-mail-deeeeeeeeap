@@ -2,6 +2,7 @@ import { env, SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import KvConst from '../src/const/kv-const';
 import { dbInit } from '../src/init/init';
+import { invalidateBootstrapStatusCache } from '../src/init/status';
 import cryptoUtils from '../src/utils/crypto-utils';
 import userService from '../src/service/user-service';
 import oauthService from '../src/service/oauth-service';
@@ -18,6 +19,7 @@ async function initializeDatabase() {
 		env.db.prepare('DELETE FROM account'),
 		env.db.prepare('DELETE FROM user')
 	]);
+	invalidateBootstrapStatusCache(env.db);
 	const kvKeys = await env.kv.list();
 	await Promise.all(kvKeys.keys.map(key => env.kv.delete(key.name)));
 }

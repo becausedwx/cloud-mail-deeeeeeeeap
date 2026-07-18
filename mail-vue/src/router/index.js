@@ -2,7 +2,7 @@ import {createRouter, createWebHistory} from 'vue-router'
 import NProgress from 'nprogress';
 import {useUiStore} from "@/store/ui.js";
 import {useSettingStore} from "@/store/setting.js";
-import {cvtR2Url} from "@/utils/convert.js";
+import {resolveRouteNavigation} from "@/router/route-navigation.js";
 
 const routes = [
     {
@@ -115,72 +115,16 @@ router.beforeEach((to, from, next) => {
 
     const token = localStorage.getItem('token')
     const settingStore = useSettingStore()
-    const setupRequired = settingStore.settings?.ready === false
+    const decision = resolveRouteNavigation({
+        token,
+        toName: to.name,
+        fromPath: from.path,
+        setupRequired: settingStore.settings?.ready === false
+    })
 
-    if (setupRequired) {
-        return to.name === 'setup' ? next() : next({name: 'setup'})
-    }
-
-    if (to.name === 'setup') {
-        return next(token ? {name: 'layout'} : {name: 'login'})
-    }
-
-    if (!token && to.name !== 'login') {
-        return next({name: 'login'})
-    }
-
-    if (!token && to.name === 'login') {
-        loadBackground(next)
-        return
-    }
-
-    if (token && to.name === 'login') {
-        return next(from.path)
-    }
-
-    next()
+    return decision.type === 'redirect' ? next(decision.to) : next()
 
 })
-
-function loadBackground(next) {
-
-    const settingStore = useSettingStore();
-
-    if (settingStore.settings.background) {
-
-        const src = cvtR2Url(settingStore.settings.background);
-
-        const img = new Image();
-        let done = false;
-        let timeoutId;
-        const allow = () => {
-            if (done) return;
-            done = true;
-            clearTimeout(timeoutId);
-            next();
-        };
-
-        img.onload = () => {
-            allow()
-        };
-
-        img.onerror = () => {
-            console.warn("背景图片加载失败:", img.src);
-            allow()
-        };
-
-        timeoutId = setTimeout(() => {
-            console.warn("背景加载超时，已放行");
-            allow()
-        }, 3000)
-
-        img.src = src;
-
-    } else {
-        next()
-    }
-
-}
 
 router.afterEach((to) => {
 
