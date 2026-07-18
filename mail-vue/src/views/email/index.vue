@@ -30,8 +30,9 @@ import {useSettingStore} from "@/store/setting.js";
 import emailScroll from "@/components/email-scroll/index.vue"
 import {emailList, emailDelete, emailDetail, emailLatest, emailRead} from "@/request/email.js";
 import {starAdd, starCancel} from "@/request/star.js";
-import {defineOptions, h, onMounted, onUnmounted, reactive, ref, watch} from "vue";
-import {sleep, waitUntilVisible} from "@/utils/time-utils.js";
+import {defineOptions, h, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch} from "vue";
+import {sleepUntil, waitUntilVisible} from "@/utils/time-utils.js";
+import {createActiveTask} from "@/utils/active-task.js";
 import router from "@/router/index.js";
 import {Icon} from "@iconify/vue";
 import { useRoute } from 'vue-router'
@@ -51,13 +52,14 @@ const params = reactive({
 
 onMounted(() => {
   emailStore.emailScroll = scroll;
-  latest()
 })
 
 // 组件卸载(如登出)时终止轮询循环，避免重复登录后累积多个常驻循环
-let stopped = false
+const latestTask = createActiveTask(latest)
+onActivated(() => latestTask.activate())
+onDeactivated(() => latestTask.deactivate())
 onUnmounted(() => {
-  stopped = true
+  latestTask.deactivate()
 })
 
 watch(() => accountStore.currentAccountId, () => {
@@ -81,17 +83,18 @@ function jumpContent(email) {
 
 const existIds = new Set();
 
-async function latest() {
-  while (!stopped) {
+async function latest(signal) {
+  while (!signal.aborted) {
 
     let autoRefresh = settingStore.settings.autoRefresh;
     //自动刷新关闭时拉长空转间隔
-    await sleep(autoRefresh > 1 ? autoRefresh * 1000 : 30000);
+    if (!await waitUntilVisible(signal)) return
+    if (!await sleepUntil(autoRefresh > 1 ? autoRefresh * 1000 : 30000, signal)) return
 
     //页面在后台时暂停轮询
-    await waitUntilVisible();
+    if (!await waitUntilVisible(signal)) return
 
-    if (stopped) {
+    if (signal.aborted) {
       return;
     }
 
@@ -110,7 +113,7 @@ async function latest() {
 
         //确保发起请求时最后一个邮件是当前账号的,或者
         if (accountId === scroll.value.latestEmail?.reqAccountId) {
-          list = await emailLatest(latestId, accountId, allReceive);
+          list = await emailLatest(latestId, accountId, allReceive, {signal});
         }
 
         //确保请求回来后，账号没有切换，时间排序没有改变，全部邮件类型没变
@@ -127,7 +130,7 @@ async function latest() {
                 existIds.add(email.emailId)
                 scroll.value.addItem(email)
 
-                await sleep(50)
+                if (!await sleepUntil(50, signal)) return
               }
 
             }
@@ -136,6 +139,7 @@ async function latest() {
 
         }
       } catch (e) {
+        if (signal.aborted) return
         if (e.code === 401 || e.code === 403) {
           settingStore.settings.autoRefresh = 0;
         }
@@ -153,10 +157,10 @@ function cancelStar(email) {
   emailStore.starScroll?.deleteEmail([email.emailId])
 }
 
-function getEmailList(emailId, size, withTotal = 1) {
+function getEmailList(emailId, size, withTotal = 1, options) {
   const accountId =  accountStore.currentAccountId;
   const allReceive = accountStore.currentAccount.allReceive;
-  return emailList(accountId, allReceive, emailId, params.timeSort, size, 0, withTotal).then(data => {
+  return emailList(accountId, allReceive, emailId, params.timeSort, size, 0, withTotal, options).then(data => {
     data.latestEmail.reqAccountId = accountId;
     data.latestEmail.allReceive = allReceive;
     return data;

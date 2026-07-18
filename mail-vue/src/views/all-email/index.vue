@@ -92,7 +92,7 @@
 <script setup>
 import {starAdd, starCancel} from "@/request/star.js";
 import emailScroll from "@/components/email-scroll/index.vue"
-import {computed, defineOptions, reactive, ref, watch, onMounted, onUnmounted} from "vue";
+import {computed, defineOptions, reactive, ref, watch, onActivated, onDeactivated, onUnmounted} from "vue";
 import {useEmailStore} from "@/store/email.js";
 import {
   allEmailList,
@@ -105,7 +105,8 @@ import {Icon} from "@iconify/vue";
 import router from "@/router/index.js";
 import {useI18n} from 'vue-i18n';
 import {toUtc} from "@/utils/day.js";
-import {sleep, waitUntilVisible} from "@/utils/time-utils.js";
+import {sleepUntil, waitUntilVisible} from "@/utils/time-utils.js";
+import {createActiveTask} from "@/utils/active-task.js";
 import {useSettingStore} from "@/store/setting.js";
 import { useRoute } from 'vue-router'
 
@@ -123,10 +124,6 @@ const searchValue = ref('')
 const mySelect = ref()
 const showBathDelete = ref(false)
 const clearLoading = ref(false)
-
-onMounted(() => {
-  latest();
-})
 
 const openSelect = () => {
   mySelect.value.toggleMenu()
@@ -299,29 +296,32 @@ function jumpContent(email) {
 }
 
 
-function getEmailList(emailId, size, withTotal = 1) {
-  return allEmailList({emailId, size, withTotal, ...params})
+function getEmailList(emailId, size, withTotal = 1, options) {
+  return allEmailList({emailId, size, withTotal, ...params}, options)
 }
 
 // 组件卸载(如登出)时终止轮询循环，避免重复登录后累积多个常驻循环
-let stopped = false
+const latestTask = createActiveTask(latest)
+onActivated(() => latestTask.activate())
+onDeactivated(() => latestTask.deactivate())
 onUnmounted(() => {
-  stopped = true
+  latestTask.deactivate()
 })
 
-async function latest() {
+async function latest(signal) {
 
-  while (!stopped) {
+  while (!signal.aborted) {
 
     let autoRefresh = settingStore.settings.autoRefresh;
 
     //自动刷新关闭时拉长空转间隔
-    await sleep(autoRefresh > 1 ? autoRefresh * 1000 : 30000);
+    if (!await waitUntilVisible(signal)) return
+    if (!await sleepUntil(autoRefresh > 1 ? autoRefresh * 1000 : 30000, signal)) return
 
     //页面在后台时暂停轮询
-    await waitUntilVisible();
+    if (!await waitUntilVisible(signal)) return
 
-    if (stopped) {
+    if (signal.aborted) {
       return;
     }
 
@@ -347,7 +347,7 @@ async function latest() {
     try {
 
       const curTimeSort = params.timeSort
-      let list = await allEmailLatest(latestId)
+      let list = await allEmailLatest(latestId, {signal})
 
       if (list.length === 0) {
         continue
@@ -365,11 +365,12 @@ async function latest() {
       for (let email of list) {
 
         sysEmailScroll.value.addItem(email)
-        await sleep(50)
+        if (!await sleepUntil(50, signal)) return
 
       }
 
     } catch (e) {
+      if (signal.aborted) return
       if (e.code === 401 || e.code === 403) {
         settingStore.settings.autoRefresh = 0;
       }

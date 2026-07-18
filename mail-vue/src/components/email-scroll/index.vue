@@ -244,8 +244,9 @@
 <script setup>
 import {Icon} from "@iconify/vue";
 import skeletonBlock from "@/components/email-scroll/skeleton/index.vue"
-import {computed, onActivated, reactive, ref, watch, nextTick, onMounted, onUnmounted } from "vue";
+import {computed, onActivated, onDeactivated, reactive, ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import {useEmailStore} from "@/store/email.js";
+import {useAccountStore} from "@/store/account.js";
 import {useUiStore} from "@/store/ui.js";
 import {useSettingStore} from "@/store/setting.js";
 import {fromNow} from "@/utils/day.js";
@@ -260,9 +261,13 @@ import {
   registerSessionResetter
 } from "@/session/auth-session.js";
 import {
-  createDetailCache,
-  loadCachedDetail
-} from "@/components/email-scroll/detail-cache.js";
+  getCachedEmailDetail as readCachedEmailDetail,
+  invalidateEmailDetails,
+  loadEmailDetail
+} from "@/components/email-scroll/email-detail-session.js";
+import {createEmailDetailView} from "@/components/email-scroll/email-detail-view.js";
+import {createPagePrefetchController} from "@/components/email-scroll/page-prefetch.js";
+import {createActiveRuntime} from "@/components/email-scroll/active-runtime.js";
 
 const props = defineProps({
   getEmailList: Function,
@@ -320,6 +325,7 @@ const {t} = useI18n()
 const settingStore = useSettingStore()
 const uiStore = useUiStore();
 const emailStore = useEmailStore();
+const accountStore = useAccountStore();
 const loading = ref(false);
 const followLoading = ref(false);
 const noLoading = ref(false);
@@ -335,8 +341,7 @@ let scrollTop = 0
 const latestEmail = ref(null)
 const scrollbarRef = ref(null)
 const requestCoordinator = createRequestCoordinator(getSessionGeneration)
-let prefetchedPage = null
-let prefetchingPage = null
+const pagePrefetch = createPagePrefetchController()
 let isMobile = ref(innerWidth < 1367)
 let skeletonRows = 0
 const timePaddingRight = ref('');
@@ -346,17 +351,12 @@ const dropdownCloseLock = ref(false);
 const dropdownShow = ref(false);
 const rightClickEmail = ref({});
 const checkedEmailCount = ref(0);
-let timer = null
 const position = ref(
     DOMRect.fromRect({
       x: 0,
       y: 0,
     })
 )
-const detailCache = createDetailCache({
-  maxEntries: 100,
-  maxBytes: 8 * 1024 * 1024
-});
 const unregisterSessionResetter = registerSessionResetter(resetEmailSessionState)
 
 const triggerRef = ref({
@@ -382,10 +382,15 @@ defineExpose({
 })
 
 onActivated(() => {
+  activeRuntime.activate()
   requestAnimationFrame(() => {
     const index = scrollTop / itemHeight.value
     scrollbarRef.value?.scrollTo(index);
   })
+})
+
+onDeactivated(() => {
+  activeRuntime.deactivate()
 })
 
 function handleResize() {
@@ -398,24 +403,33 @@ function handleWheel() {
   }
 }
 
-onMounted(() => {
-  timer = setInterval(() => {
+const activeRuntime = createActiveRuntime({
+  intervalMs: 1000 * 60,
+  onInterval: () => {
     emailList.forEach(email => {
       email.formatCreateTime = fromNow(email.createTime);
     })
-  }, 1000 * 60);
-  window.addEventListener('resize', handleResize)
-  window.addEventListener('wheel', handleWheel)
+  },
+  listeners: [
+    { target: window, type: 'resize', listener: handleResize },
+    { target: window, type: 'wheel', listener: handleWheel }
+  ],
+  onActivate: () => pagePrefetch.activate(),
+  onDeactivate: () => {
+    pagePrefetch.deactivate()
+    clearTimeout(preloadTimer)
+  }
+})
+
+onMounted(() => {
+  activeRuntime.activate()
 })
 
 onUnmounted(() => {
   requestCoordinator.invalidate()
   unregisterSessionResetter()
-  detailCache.clear()
-  clearInterval(timer)
+  activeRuntime.deactivate()
   clearTimeout(preloadTimer)
-  window.removeEventListener('resize', handleResize)
-  window.removeEventListener('wheel', handleWheel)
 })
 
 getEmailList()
@@ -481,7 +495,7 @@ watch(noLoading, (isNoLoading) => {
 
 // 监听是否到达底部
 watch(() => arrivedState.bottom, (isBottom) => {
-  if (isBottom && !loading.value) {
+  if (isBottom && activeRuntime.isActive() && !loading.value) {
     loadData();
   }
 });
@@ -534,19 +548,27 @@ async function resolveEmailDetail(email) {
   if (email.content || !props.getEmailDetail) {
     return email;
   }
-  const detail = await getCachedEmailDetail(email.emailId);
+  const detail = await loadCachedEmailDetail(email.emailId);
   if (!detail) return null;
-  Object.assign(email, detail);
-  return email;
+  return createEmailDetailView(email, detail);
 }
 
-async function getCachedEmailDetail(emailId) {
+function detailDescriptor(emailId) {
+  return {
+    accountId: accountStore.currentAccountId,
+    sessionGeneration: getSessionGeneration(),
+    emailId,
+    scope: props.type === 'all-email' ? 'physics' : 'logic'
+  }
+}
+
+async function loadCachedEmailDetail(emailId) {
   const requestGeneration = getSessionGeneration()
-  return loadCachedDetail({
-    cache: detailCache,
-    key: emailId,
-    load: () => props.getEmailDetail(emailId),
-    isCurrent: () => requestGeneration === getSessionGeneration()
+  return loadEmailDetail({
+    ...detailDescriptor(emailId),
+    load: signal => props.getEmailDetail(emailId, { signal })
+  }).then(detail => {
+    return requestGeneration === getSessionGeneration() ? detail : null
   })
 }
 
@@ -554,13 +576,14 @@ let preloadTimer = null;
 
 //hover 节流：停留 150ms 才预取详情，快速滑过列表不再触发批量请求
 function preloadEmailDetail(email) {
-  if (!props.getEmailDetail || !email?.emailId || email.content || detailCache.has(email.emailId)) {
+  if (!props.getEmailDetail || !email?.emailId || email.content
+      || readCachedEmailDetail(detailDescriptor(email.emailId)) !== undefined) {
     return;
   }
 
   clearTimeout(preloadTimer);
   preloadTimer = setTimeout(() => {
-    getCachedEmailDetail(email.emailId).catch(() => {});
+    loadCachedEmailDetail(email.emailId).catch(() => {});
   }, 150);
 }
 
@@ -669,6 +692,7 @@ function starChange(email) {
     email.isStar = 1;
     props.starAdd(email.emailId).then(() => {
       email.isStar = 1;
+      invalidateEmailDetails({ emailIds: [email.emailId] })
       props.starSuccess(email)
     }).catch(e => {
       console.error(e)
@@ -679,6 +703,7 @@ function starChange(email) {
     email.isStar = 0;
     props.starCancel(email.emailId).then(() => {
       email.isStar = 0;
+      invalidateEmailDetails({ emailIds: [email.emailId] })
       props.cancelSuccess?.(email)
     }).catch(e => {
       console.error(e)
@@ -695,11 +720,13 @@ const handleRead = () => {
   const emailIds = getSelectedMailsIds();
   props.emailRead(emailIds);
   localRead(emailIds);
+  invalidateEmailDetails({ emailIds })
 }
 
 function emailRead(emailId) {
   props.emailRead([emailId])
   localRead([emailId]);
+  invalidateEmailDetails({ emailIds: [emailId] })
 }
 
 function localRead(emailIds) {
@@ -789,7 +816,8 @@ function handleDelete() {
 }
 
 function deleteEmail(emailIds) {
-  emailIds.forEach(emailId => detailCache.delete(emailId));
+  invalidateEmailDetails({ emailIds })
+  pagePrefetch.invalidate()
   let removed = 0;
   emailIds.forEach(emailId => {
     emailList.forEach((item, index) => {
@@ -808,6 +836,7 @@ function deleteEmail(emailIds) {
 }
 
 function addItem(email) {
+  pagePrefetch.invalidate()
 
   const existIndex = emailList.findIndex(item => item.emailId === email.emailId)
 
@@ -897,7 +926,6 @@ function getEmailList(refresh = false) {
 
   let emailId = emailList.length > 0 ? emailList.at(-1).emailId : 0;
   const pageKey = getPageKey(emailId);
-  const usePrefetch = !refresh && prefetchedPage?.key === pageKey;
 
   if (!refresh) {
 
@@ -921,13 +949,11 @@ function getEmailList(refresh = false) {
 
   // 仅首屏/刷新(无游标)取 COUNT，翻页 withTotal=0 跳过总数统计
   const withTotal = emailId === 0 ? 1 : 0;
-  const dataPromise = usePrefetch ? Promise.resolve(prefetchedPage.data) : props.getEmailList(emailId, queryParam.size, withTotal);
-  if (usePrefetch) {
-    prefetchedPage = null;
-  }
+  const dataPromise = (!refresh && pagePrefetch.consume(pageKey))
+      || props.getEmailList(emailId, queryParam.size, withTotal);
 
   dataPromise.then(async data => {
-    if (!requestCoordinator.isCurrent(request)) {
+    if (!data || !requestCoordinator.isCurrent(request)) {
       return;
     }
 
@@ -956,7 +982,7 @@ function getEmailList(refresh = false) {
     if (withTotal) {
       total.value = data.total;
     }
-    prefetchNextPage(request);
+    scheduleNextPagePrefetch(request);
   }).catch(e => {
     if (!requestCoordinator.isCurrent(request)) {
       return;
@@ -978,31 +1004,21 @@ function getPageKey(emailId) {
   return [props.type, props.timeSort, emailId, queryParam.size].join(':');
 }
 
-function prefetchNextPage(request) {
-  if (noLoading.value || emailList.length === 0 || !props.getEmailList) {
+function scheduleNextPagePrefetch(request) {
+  if (!activeRuntime.isActive() || noLoading.value || emailList.length === 0 || !props.getEmailList) {
     return;
   }
 
   const nextEmailId = emailList.at(-1).emailId;
   const key = getPageKey(nextEmailId);
 
-  if (prefetchedPage?.key === key || prefetchingPage === key) {
-    return;
-  }
-
-  prefetchingPage = key;
-  props.getEmailList(nextEmailId, queryParam.size, 0)
-      .then(data => {
-        if (requestCoordinator.isCurrent(request)) {
-          prefetchedPage = { key, data };
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (prefetchingPage === key) {
-          prefetchingPage = null;
-        }
-      });
+  pagePrefetch.schedule({
+    key,
+    load: signal => {
+      if (!requestCoordinator.isCurrent(request)) return null
+      return props.getEmailList(nextEmailId, queryParam.size, 0, { signal })
+    }
+  });
 }
 
 function handleList(list) {
@@ -1041,8 +1057,8 @@ function refreshList() {
   isIndeterminate.value = false;
   loadError.value = false;
   const canStartImmediately = requestCoordinator.invalidate({queueRefresh: true});
-  prefetchedPage = null;
-  prefetchingPage = null;
+  invalidateEmailDetails({ emailIds: emailList.map(email => email.emailId) })
+  pagePrefetch.invalidate();
   if (canStartImmediately) {
     getEmailList(true);
   }
@@ -1050,9 +1066,7 @@ function refreshList() {
 
 function resetEmailSessionState() {
   requestCoordinator.invalidate()
-  prefetchedPage = null
-  prefetchingPage = null
-  detailCache.clear()
+  pagePrefetch.invalidate()
   clearTimeout(preloadTimer)
   emailList.length = 0
   expandList.length = 0

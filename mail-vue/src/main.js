@@ -1,4 +1,4 @@
-import {createApp} from 'vue';
+import {createApp, watch} from 'vue';
 import App from './App.vue';
 import router from './router';
 import './style.css';
@@ -19,6 +19,7 @@ import {useUiStore} from "@/store/ui.js";
 import {useUserStore} from "@/store/user.js";
 import {useWriterStore} from "@/store/writer.js";
 import {closeDraftDatabase, initializeDraftDatabase} from "@/db/db.js";
+import {clearEmailDetailSession} from "@/components/email-scroll/email-detail-session.js";
 const pinia = createPinia().use(piniaPersistedState)
 import i18n from "@/i18n/index.js";
 const app = createApp(App).use(pinia)
@@ -30,6 +31,7 @@ configureAuthSession({
 })
 initializeDraftDatabase(userStore)
 registerSessionResetter(closeDraftDatabase)
+registerSessionResetter(clearEmailDetailSession)
 registerSessionResetter(() => resetAuthenticatedStores({
     accountStore: useAccountStore(),
     userStore,
@@ -40,6 +42,15 @@ registerSessionResetter(() => resetAuthenticatedStores({
     writerStore: useWriterStore(),
     uiStore: useUiStore()
 }))
+watch(
+    () => [
+        useAccountStore().currentAccountId,
+        userStore.user?.userId,
+        ...(userStore.user?.permKeys || [])
+    ],
+    clearEmailDetailSession,
+    {flush: 'sync'}
+)
 
 try {
     await init()

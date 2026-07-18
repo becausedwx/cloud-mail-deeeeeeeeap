@@ -10,7 +10,6 @@ import KvConst from '../const/kv-const';
 import cryptoUtils from '../utils/crypto-utils';
 import emailService from './email-service';
 import dayjs from 'dayjs';
-import permService from './perm-service';
 import roleService from './role-service';
 import emailUtils from '../utils/email-utils';
 import saltHashUtils from '../utils/crypto-utils';
@@ -20,22 +19,21 @@ import reqUtils from '../utils/req-utils';
 import {oauth} from "../entity/oauth";
 import oauthService from "./oauth-service";
 import { chunkArray, truncateLikeTerm } from '../utils/sql-utils';
+import { selectLoginUserContext } from './login-user-info-query';
 
 const userService = {
 
 	async loginUserInfo(c, userId) {
 
-		const userRow = await userService.selectById(c, userId);
+		const { userRow, account, roleRow, permKeys: queriedPermKeys } =
+			await selectLoginUserContext(c, userId);
 
 		if (!userRow) {
 			throw new BizError(t('authExpired'), 401);
 		}
 
-		const [account, roleRow, permKeys] = await Promise.all([
-			accountService.selectByEmailIncludeDel(c, userRow.email),
-			roleService.selectById(c, userRow.type),
-			emailUtils.isSameAddress(userRow.email, c.env.admin) ? Promise.resolve(['*']) : permService.userPermKeys(c, userId)
-		]);
+		const isAdmin = emailUtils.isSameAddress(userRow.email, c.env.admin);
+		const permKeys = isAdmin ? ['*'] : queriedPermKeys;
 
 		const user = {};
 		user.userId = userRow.userId;
@@ -47,7 +45,7 @@ const userService = {
 		user.role = roleRow;
 		user.type = userRow.type;
 
-		if (emailUtils.isSameAddress(userRow.email, c.env.admin)) {
+		if (isAdmin) {
 			user.role = constant.ADMIN_ROLE
 			user.type = 0;
 		}

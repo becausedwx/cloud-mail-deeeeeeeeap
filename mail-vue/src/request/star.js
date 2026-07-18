@@ -8,6 +8,6 @@ export function starCancel(emailId) {
     return http.delete('/star/cancel', {params: {emailId}})
 }
 
-export function starList(emailId,size) {
-    return http.get('/star/list', {params: {emailId,size,lite: 1}})
+export function starList(emailId,size,_withTotal, {signal} = {}) {
+    return http.get('/star/list', {params: {emailId,size,lite: 1}, signal})
 }

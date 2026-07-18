@@ -72,10 +72,10 @@ function cancelStar(email) {
   emailStore.starScroll?.deleteEmail([email.emailId])
 }
 
-function getEmailList(emailId, size, withTotal = 1) {
+function getEmailList(emailId, size, withTotal = 1, options) {
   const accountId =  accountStore.currentAccountId;
   const allReceive = accountStore.currentAccount.allReceive;
-  return emailList(accountId, allReceive, emailId, params.timeSort, size, 1, withTotal).then(data => {
+  return emailList(accountId, allReceive, emailId, params.timeSort, size, 1, withTotal, options).then(data => {
     data.latestEmail.reqAccountId = accountId;
     data.latestEmail.allReceive = allReceive;
     return data;

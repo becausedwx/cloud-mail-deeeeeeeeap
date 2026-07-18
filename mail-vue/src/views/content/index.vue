@@ -90,13 +90,26 @@ import {allEmailDelete, allEmailDetail} from "@/request/all-email.js";
 import {useUiStore} from "@/store/ui.js";
 import {useI18n} from "vue-i18n";
 import {EmailUnreadEnum} from "@/enums/email-enum.js";
+import {getSessionGeneration} from "@/session/auth-session.js";
+import {
+  invalidateEmailDetails,
+  loadEmailDetail
+} from "@/components/email-scroll/email-detail-session.js";
+import {
+  createEmailDetailView,
+  synchronizeEmailReadState,
+  toLiteEmailListItem
+} from "@/components/email-scroll/email-detail-view.js";
 
 const uiStore = useUiStore();
 const settingStore = useSettingStore();
 const accountStore = useAccountStore();
 const emailStore = useEmailStore();
 const router = useRouter()
-const email = emailStore.contentData.email
+const sourceEmail = emailStore.contentData.email
+const email = reactive(createEmailDetailView(sourceEmail))
+const shouldMarkAsRead = emailStore.contentData.showUnread
+    && email.unread === EmailUnreadEnum.UNREAD
 const showPreview = ref(false)
 const srcList = reactive([])
 let detailPromise = null
@@ -109,8 +122,12 @@ watch(() => accountStore.currentAccountId, () => {
 
 onMounted(() => {
   loadDetail();
-  if (emailStore.contentData.showUnread && email.unread === EmailUnreadEnum.UNREAD) {
-    email.unread = EmailUnreadEnum.READ;
+  if (shouldMarkAsRead) {
+    synchronizeEmailReadState({
+      source: sourceEmail,
+      view: email,
+      readValue: EmailUnreadEnum.READ
+    })
     emailRead([email.emailId]);
   }
 })
@@ -139,11 +156,23 @@ async function loadDetail() {
   }
 
   detailPromise = (async () => {
-    const detail = emailStore.contentData.delType === 'physics'
-        ? await allEmailDetail(email.emailId)
-        : await emailDetail(email.emailId);
+    const physics = emailStore.contentData.delType === 'physics'
+    const detail = await loadEmailDetail({
+      accountId: accountStore.currentAccountId,
+      sessionGeneration: getSessionGeneration(),
+      emailId: email.emailId,
+      scope: physics ? 'physics' : 'logic',
+      load: signal => physics
+          ? allEmailDetail(email.emailId, { signal })
+          : emailDetail(email.emailId, { signal })
+    });
 
-    Object.assign(email, detail);
+    if (detail) {
+      if (shouldMarkAsRead) {
+        synchronizeEmailReadState({ detail, readValue: EmailUnreadEnum.READ })
+      }
+      Object.assign(email, detail);
+    }
   })().catch(error => {
     detailPromise = null;
     throw error;
@@ -260,6 +289,8 @@ function changeStar() {
     email.isStar = 0;
     starCancel(email.emailId).then(() => {
       email.isStar = 0;
+      sourceEmail.isStar = 0;
+      invalidateEmailDetails({ emailIds: [email.emailId] })
       emailStore.cancelStarEmailId = email.emailId
       setTimeout(() => emailStore.cancelStarEmailId = 0)
       emailStore.starScroll?.deleteEmail([email.emailId])
@@ -271,9 +302,11 @@ function changeStar() {
     email.isStar = 1;
     starAdd(email.emailId).then(() => {
       email.isStar = 1;
+      sourceEmail.isStar = 1;
+      invalidateEmailDetails({ emailIds: [email.emailId] })
       emailStore.addStarEmailId = email.emailId
       setTimeout(() => emailStore.addStarEmailId = 0)
-      emailStore.starScroll?.addItem(email)
+      emailStore.starScroll?.addItem(toLiteEmailListItem(sourceEmail, {isStar: 1}))
     }).catch((e) => {
       console.error(e)
       email.isStar = 0;
@@ -293,6 +326,7 @@ const handleDelete = () => {
   }).then(() => {
     if (emailStore.contentData.delType === 'logic') {
       emailDelete(email.emailId).then(() => {
+        invalidateEmailDetails({ emailIds: [email.emailId] })
         ElMessage({
           message: t('delSuccessMsg'),
           type: 'success',
@@ -303,6 +337,7 @@ const handleDelete = () => {
     } else  {
 
       allEmailDelete(email.emailId).then(() => {
+        invalidateEmailDetails({ emailIds: [email.emailId] })
         ElMessage({
           message: t('delSuccessMsg'),
           type: 'success',
