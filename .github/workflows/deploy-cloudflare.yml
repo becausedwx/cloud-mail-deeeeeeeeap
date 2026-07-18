@@ -34,14 +34,9 @@ jobs:
       LINUXDO_CLIENT_SECRET: ${{ secrets.LINUXDO_CLIENT_SECRET }}
       LINUXDO_CALLBACK_URL: ${{ secrets.LINUXDO_CALLBACK_URL || vars.LINUXDO_CALLBACK_URL }}
       LINUXDO_SWITCH: ${{ secrets.LINUXDO_SWITCH || vars.LINUXDO_SWITCH }}
-      CORS_ORIGINS: ${{ secrets.CORS_ORIGINS || vars.CORS_ORIGINS }}
+      CORS_ORIGINS: ${{ secrets.CORS_ORIGINS || vars.CORS_ORIGINS || '[]' }}
       RESEND_WEBHOOK_SECRET: ${{ secrets.RESEND_WEBHOOK_SECRET }}
       RESEND_WEBHOOK_ALLOW_UNSIGNED: ${{ secrets.RESEND_WEBHOOK_ALLOW_UNSIGNED || vars.RESEND_WEBHOOK_ALLOW_UNSIGNED }}
-
-
-    outputs:
-      worker_url: ${{ steps.deploy.outputs.worker_url }}
-
 
     steps:
       - name: 🚚 检出代码仓库 / Checkout repository
@@ -62,8 +57,7 @@ jobs:
             ./mail-vue/pnpm-lock.yaml
 
       - name: 📦 安装依赖 / Install dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: ./mail-worker
+        run: node scripts/cloudflare-workers-git-build.mjs
 
       - name: 📡 禁用 Wrangler 遥测 / Disable wrangler telemetry
         working-directory: ./mail-worker
@@ -86,6 +80,11 @@ jobs:
             exit 1
           fi
           
+          if ! jq -e 'type == "array" and all(.[]; type == "string" and length > 0)' <<< "$CORS_ORIGINS" >/dev/null; then
+            echo "ERROR: CORS_ORIGINS must be a JSON array of non-empty origins."
+            exit 1
+          fi
+
           if [ -z "$ADMIN" ]; then
             echo "❌ ADMIN variable cannot be empty."
             exit 1
@@ -210,43 +209,32 @@ jobs:
             exit 1
           fi
           
-          if echo "$DB_LIST" | jq -e ".[] | select(.name == \"$NAME\")" >/dev/null; then
-            echo "✅ Database $NAME already exists."
-            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
+          if echo "$DB_LIST" | jq -e ".[] | select(.name == \"$D1_DATABASE_NAME\")" >/dev/null; then
+            echo "✅ Database $D1_DATABASE_NAME already exists."
+            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$D1_DATABASE_NAME\") | .uuid")
             echo "D1_DATABASE_ID: $D1_ID"
           else
-            echo "⚠️ Database $NAME does not exist. Starting creation..."
-            pnpm wrangler d1 create $NAME
+            echo "⚠️ Database $D1_DATABASE_NAME does not exist. Starting creation..."
+            pnpm wrangler d1 create "$D1_DATABASE_NAME"
             DB_LIST=$(pnpm wrangler d1 list --json)
-            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
+            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$D1_DATABASE_NAME\") | .uuid")
           fi
           
           sed -i "s|\${D1_DATABASE_ID}|$D1_ID|g" "$CONFIG_FILE"
           echo "✅ Setup completed."
 
       - name: 🚀 开始部署 / Start deployment
-        id: deploy
         working-directory: ./mail-worker
         run: |
           echo "🚀 Starting deployment..."
+          set +e
           pnpm wrangler deploy -c wrangler-action.toml 2>&1 \
-            | tee deploy.log \
-            | grep -v "https://.*\.workers\.dev" \
-            | sed -E 's/env\.domain .*/env.domain (***)/' \
-            || true
-          
+            | sed -E 's#https://[^[:space:]]+#<redacted-url>#g; s/env\.domain .*/env.domain (***)/'
           DEPLOY_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
           if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
             exit 1
           fi
-          
-          WORKER_URL=$(grep -o "https://.*\.workers\.dev" deploy.log || echo "")
-          
-          if [ -n "$WORKER_URL" ]; then
-            echo "::add-mask::$WORKER_URL"
-          fi
-          
-          echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
           echo "✅ Setup completed."
 
       - name: 🔐 设置运行时密钥 / Set runtime secrets
@@ -267,27 +255,18 @@ jobs:
           echo "🛠️ Starting database initialization..."
           sleep 15
           
-          WORKER_URL="${CUSTOM_DOMAIN:+https://$CUSTOM_DOMAIN}"
-          WORKER_URL="${WORKER_URL:-${{ steps.deploy.outputs.worker_url }}}"
-          
-          if [ -z "$WORKER_URL" ]; then
-            echo "❌ Preview URL not available. Please set CUSTOM_DOMAIN."
+          if [ -z "$CUSTOM_DOMAIN" ]; then
+            echo "ERROR: CUSTOM_DOMAIN is required for protected initialization."
             exit 1
           fi
-          
-          HTTP_CODE=$(curl -sS -X POST -H "X-Cloud-Mail-Init-Secret: $JWT_SECRET" -w "%{http_code}" -o response.txt "$WORKER_URL/api/init")
-          RESPONSE_BODY=$(cat response.txt)
 
-          if [ "$RESPONSE_BODY" = "success" ]; then
+          RESPONSE_FILE=$(mktemp)
+          trap 'rm -f "$RESPONSE_FILE"' EXIT
+          HTTP_CODE=$(curl -s -X POST -H "X-Cloud-Mail-Init-Secret: $JWT_SECRET" -w "%{http_code}" -o "$RESPONSE_FILE" "https://$CUSTOM_DOMAIN/api/init")
+
+          if [ "$HTTP_CODE" = "200" ] && [ "$(cat "$RESPONSE_FILE")" = "success" ]; then
             echo "✅ Setup completed."
           else
-            echo "❌ Failed. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
+            echo "ERROR: Database initialization failed with HTTP $HTTP_CODE."
             exit 1
           fi
-
-      - name: 🗑️ 删除运行记录 / Delete workflow runs
-        uses: GitRML/delete-workflow-runs@main
-        continue-on-error: true
-        with:
-          retain_days: '1'
-          keep_minimum_runs: '0'

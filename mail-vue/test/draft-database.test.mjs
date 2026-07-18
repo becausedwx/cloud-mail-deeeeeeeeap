@@ -43,3 +43,28 @@ test('switching accounts closes but never deletes the previous draft database', 
   assert.equal(events.some(event => event.startsWith('delete:')), false)
   assert.equal(databases.size, 2)
 })
+
+test('draft consumers can wait until the active account database is open', async () => {
+  let finishOpen
+  const database = {
+    open: () => new Promise(resolve => {
+      finishOpen = resolve
+    }),
+    close() {}
+  }
+  const controller = createDraftDatabaseController({
+    createDatabase: () => database
+  })
+
+  controller.switchTo('member@example.com')
+  let settled = false
+  const ready = controller.ready().then(value => {
+    settled = true
+    return value
+  })
+  await Promise.resolve()
+
+  assert.equal(settled, false)
+  finishOpen()
+  assert.equal(await ready, database)
+})

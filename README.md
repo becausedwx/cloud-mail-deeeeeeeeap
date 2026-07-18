@@ -76,10 +76,12 @@
 
 ### 性能与安全
 
-- 邮件列表接口瘦身，正文按需加载；`email_search` 搜索表 + 组合索引优化 D1 查询。
+- lite 邮件与收藏列表只查询附件数量，正文和完整附件元数据按需加载；详情缓存使用 100 项 / 8 MiB 的 LRU 预算；`email_search` 搜索表 + 组合索引优化 D1 查询。
 - 设置、权限、角色短缓存；附件匹配 Map 化。
 - 前端 Vite 分包：Element Plus、ECharts、Dexie、Vue vendor 独立 chunk；TinyMCE、Turnstile 按需加载。
-- Worker CORS 默认收紧（`cors_origins` 显式放行）；公告和邮件 HTML 基础安全清洗；public 接口参数绑定防注入。
+- Worker CORS 默认收紧（`cors_origins` 显式放行）；公告和邮件 HTML 基础安全清洗；public 接口参数绑定防注入；所有 JSON API 使用端点级正文上限。
+- 注销、401 和账号切换会清除认证态、动态权限路由及邮件缓存，但保留主题、语言和按账号隔离的本地草稿；草稿及附件通过 Dexie 事务同步提交或回滚。
+- 静态页面启用兼容 TinyMCE、Turnstile、PWA 和邮件 Shadow DOM 的 CSP 与安全响应头，脚本策略不允许 `unsafe-inline`。
 
 ## 🧰 技术栈
 
@@ -225,7 +227,7 @@ try {
 
 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`CUSTOM_DOMAIN`、`DOMAIN`、`ADMIN`、`JWT_SECRET`、`D1_DATABASE_NAME`、`D1_DATABASE_ID`、`KV_NAMESPACE_ID`，以及可选的 `R2_BUCKET_NAME`、`RESEND_WEBHOOK_SECRET`（推荐）、`RESEND_WEBHOOK_ALLOW_UNSIGNED`、`CORS_ORIGINS`。
 
-手动工作流执行后会完成：安装依赖 → 生成 `wrangler-action.toml` → 检查/填充 D1、KV 绑定 → 构建前端并部署 → 通过 `POST /api/init` 初始化数据库。管理员账户仍需按 `/setup` 提示通过 `POST /api/init/admin` 创建，工作流不会接收或记录管理员密码。
+手动工作流执行后会完成：安装依赖 → 串行 Worker 全量测试、前端测试和 release build → 生成 `wrangler-action.toml` → 按 `D1_DATABASE_NAME` 检查/填充 D1 和 KV 绑定 → 部署 → 通过 `POST /api/init` 初始化数据库。自动初始化要求配置 `CUSTOM_DOMAIN`；`CORS_ORIGINS` 必须是 JSON 字符串数组，例如 `["https://admin.example.com"]`。工作流不会保留部署日志、输出部署 URL、删除 Actions 运行历史，也不会接收或记录管理员密码。
 
 </details>
 
@@ -271,12 +273,17 @@ cd mail-vue && corepack pnpm dev
 发布前检查：
 
 ```powershell
-# Worker 测试
-cd mail-worker && corepack pnpm vitest run
+# 从仓库根目录运行共享门禁：Worker 串行全量、前端全量、release build
+node scripts/verify.mjs
 
-# 前端构建（产物输出到 mail-worker/dist）
-cd ../mail-vue && corepack pnpm build
+# 依赖公告（固定使用仓库声明的 pnpm 大版本）
+npx pnpm@10.11.1 --prefix mail-worker audit
+npx pnpm@10.11.1 --prefix mail-vue audit
 ```
+
+`.github/workflows/ci.yml` 会在 `main` 推送和 Pull Request 上执行同一门禁；Cloudflare Git 构建与兼容的手动部署也会在 Wrangler 部署前执行它。Windows 上如 workerd 因 Unicode 路径不稳定，可把内容一致的 Worker 测试镜像放在纯 ASCII 路径，并通过 `CLOUD_MAIL_WORKER_TEST_DIR` 指向该目录；CI 默认直接使用仓库内的 `mail-worker`。
+
+当前依赖审计为 Worker `0` 项、前端仅保留 1 项 Moderate：[`GHSA-fgmj-fm8m-jvvx`](https://github.com/advisories/GHSA-fgmj-fm8m-jvvx)。该公告仅影响使用内置 tooltip 且未自定义 formatter 的 ECharts `lines` 系列；本项目分析页只使用 `line`、`bar` 和 `pie` 系列，并对唯一来自邮件的发件人 tooltip 名称显式做 HTML 转义，因此当前调用路径不触发该漏洞。上游修复仍要求 ECharts `6.1.0`，属于未授权的主版本升级；后续升级 ECharts 6 时需单独完成图表兼容回归。
 
 ## 📮 公开自动化发件接口
 
@@ -347,7 +354,7 @@ LinuxDo OAuth：浏览器会先调用 `POST /api/oauth/linuxDo/authorize`，由 
 | `501` | 现有发件链路返回的其他业务错误，例如未配置站外发信通道 |
 | `502` | 外部投递结果无法确定；不要自动重试，应在维护中心和供应商后台人工核对 |
 
-> 项目沿用统一 JSON 响应格式，业务状态由响应体的 `code` 字段表示。
+> 项目沿用统一 JSON 响应格式并保留响应体 `code`；业务错误同时返回对应的真实 HTTP 4xx/5xx，未知异常统一返回脱敏的 HTTP 500。
 
 ## 🔍 验证码识别说明
 

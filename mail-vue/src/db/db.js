@@ -1,9 +1,8 @@
 import Dexie from 'dexie'
-import { shallowRef, watch } from 'vue'
+import { watch } from 'vue'
 import { createDraftDatabaseController } from '@/db/draft-database-controller.js'
 import { cleanupOrphanDraftAttachments } from '@/db/draft-repository.js'
 
-const db = shallowRef({})
 let stopUserWatch = null
 
 const controller = createDraftDatabaseController({
@@ -21,9 +20,6 @@ const controller = createDraftDatabaseController({
     } catch (error) {
       console.error('Draft attachment cleanup failed', error)
     }
-  },
-  onChange(database) {
-    db.value = database || {}
   }
 })
 
@@ -48,4 +44,6 @@ export function closeDraftDatabase() {
   controller.close()
 }
 
-export default db
+export function waitForDraftDatabase() {
+  return controller.ready()
+}

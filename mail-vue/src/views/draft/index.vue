@@ -29,7 +29,7 @@ import {starAdd, starCancel} from "@/request/star.js";
 import {defineOptions, ref, watch, toRaw} from "vue";
 import {useUiStore} from "@/store/ui.js";
 import {userDraftStore} from "@/store/draft.js";
-import db from "@/db/db.js"
+import {waitForDraftDatabase} from "@/db/db.js"
 import {
   deleteDrafts,
   getDraftAttachments,
@@ -46,7 +46,9 @@ const scroll = ref({})
 
 watch(() => draftStore.setDraft, async () => {
   const draft = toRaw(draftStore.setDraft)
-  await saveDraft(db.value, {
+  const database = await waitForDraftDatabase()
+  if (!database) return
+  await saveDraft(database, {
     ...draft,
     receiveEmail: [...(draft.receiveEmail || [])],
     attachments: (draft.attachments || []).map(item => ({...toRaw(item)}))
@@ -63,21 +65,24 @@ watch(() => draftStore.refreshList, async () => {
     scroll.value.emailList.push(...list)
 })
 
-function getEmailList() {
-  return new Promise((resolve, reject) => {
-    db.value.draft.orderBy('createTime').reverse().toArray().then(list => {
-      resolve({list})
-    })
-  })
+async function getEmailList() {
+  const database = await waitForDraftDatabase()
+  if (!database) return {list: []}
+  const list = await database.draft.orderBy('createTime').reverse().toArray()
+  return {list}
 }
 
 async function deleteDraft(draftIds) {
-  await deleteDrafts(db.value, draftIds);
+  const database = await waitForDraftDatabase()
+  if (!database) return
+  await deleteDrafts(database, draftIds);
   draftStore.refreshList++
 }
 
 async function jumpContent(email) {
-  email.attachments = await getDraftAttachments(db.value, email.draftId)
+  const database = await waitForDraftDatabase()
+  if (!database) return
+  email.attachments = await getDraftAttachments(database, email.draftId)
   uiStore.writerRef.openDraft(email);
 }
 

@@ -109,7 +109,7 @@ import {formatDetailDate} from "@/utils/day.js";
 import {useSettingStore} from "@/store/setting.js";
 import {userDraftStore} from "@/store/draft.js";
 import {useWriterStore} from "@/store/writer.js";
-import db from "@/db/db.js";
+import {waitForDraftDatabase} from "@/db/db.js";
 import dayjs from "dayjs";
 import {useI18n} from "vue-i18n";
 import {ElMessageBox} from "element-plus";
@@ -655,7 +655,9 @@ function close() {
       attachments: form.attachments.map(item => ({...toRaw(item)}))
     };
     formData.createTime = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
-    await saveDraft(db.value, formData)
+    const database = await waitForDraftDatabase()
+    if (!database) throw new Error('Draft database is unavailable')
+    await saveDraft(database, formData)
     draftStore.refreshList++
     show.value = false
     await nextTick(() => {

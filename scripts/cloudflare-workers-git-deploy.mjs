@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { redactDeploymentOutput } from './deployment-output.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
@@ -129,8 +130,16 @@ const command = process.platform === 'win32' ? 'cmd.exe' : 'npx';
 const commandArgs = process.platform === 'win32' ? ['/d', '/s', '/c', 'npx', ...deployArgs] : deployArgs;
 const result = spawnSync(command, commandArgs, {
   cwd: repoRoot,
-  stdio: 'inherit'
+  encoding: 'utf8',
+  maxBuffer: 10 * 1024 * 1024
 });
+
+if (result.stdout) {
+  process.stdout.write(redactDeploymentOutput(result.stdout));
+}
+if (result.stderr) {
+  process.stderr.write(redactDeploymentOutput(result.stderr));
+}
 
 if (result.error) {
   console.error(`[cloud-mail-deploy] Failed to run npx: ${result.error.message}`);
