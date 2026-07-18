@@ -1,6 +1,6 @@
 import orm from '../entity/orm';
 import { att } from '../entity/att';
-import { and, eq, isNull, inArray, desc, sql } from 'drizzle-orm';
+import { and, count, eq, isNull, inArray, desc, sql } from 'drizzle-orm';
 import r2Service from './r2-service';
 import constant from '../const/constant';
 import fileUtils from '../utils/file-utils';
@@ -688,6 +688,22 @@ const attService = {
 			rows.push(...await orm(c).select().from(att).where(
 				and(...conditions))
 				.all());
+		}
+		return rows;
+	},
+
+	async countByEmailIds(c, emailIds) {
+		const rows = [];
+		for (const chunk of chunkArray(emailIds)) {
+			rows.push(...await orm(c).select({
+				emailId: att.emailId,
+				attCount: count(att.attId)
+			}).from(att).where(and(
+				inArray(att.emailId, chunk),
+				eq(att.type, attConst.type.ATT),
+				eq(att.status, attConst.status.READY),
+				parentEmailReadyCondition()
+			)).groupBy(att.emailId).all());
 		}
 		return rows;
 	},

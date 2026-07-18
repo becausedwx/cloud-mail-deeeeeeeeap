@@ -329,7 +329,7 @@ const emailService = {
 		}));
 
 
-		await this.emailAddAtt(c, list);
+		await this.emailAddAtt(c, list, { lite });
 
 		if (!latestEmail) {
 			latestEmail = {
@@ -1221,7 +1221,7 @@ const emailService = {
 			.orderBy(desc(email.emailId))
 			.limit(20);
 
-		await this.emailAddAtt(c, list);
+		await this.emailAddAtt(c, list, { lite });
 		list = list.map(item => ({
 			...item,
 			previewText: previewText(item)
@@ -1360,7 +1360,7 @@ const emailService = {
 			if (searchData) {
 				let { list, totalRow, latestEmail, hasMore } = searchData;
 
-				await this.emailAddAtt(c, list);
+				await this.emailAddAtt(c, list, { lite });
 				list = list.map(item => ({
 					...item,
 					previewText: previewText(item)
@@ -1466,7 +1466,7 @@ const emailService = {
 		const hasMore = list.length > size;
 		list = hasMore ? list.slice(0, size) : list;
 
-		await this.emailAddAtt(c, list);
+		await this.emailAddAtt(c, list, { lite });
 		list = list.map(item => ({
 			...item,
 			previewText: previewText(item)
@@ -1499,7 +1499,7 @@ const emailService = {
 			.orderBy(desc(email.emailId))
 			.limit(20);
 
-		await this.emailAddAtt(c, list);
+		await this.emailAddAtt(c, list, { lite });
 		list = list.map(item => ({
 			...item,
 			previewText: previewText(item)
@@ -1508,11 +1508,20 @@ const emailService = {
 		return list;
 	},
 
-	async emailAddAtt(c, list) {
+	async emailAddAtt(c, list, { lite = false } = {}) {
 
 		const emailIds = list.map(item => item.emailId);
 
 		if (emailIds.length > 0) {
+			if (lite) {
+				const countRows = await attService.countByEmailIds(c, emailIds);
+				const countMap = new Map(countRows.map(row => [row.emailId, Number(row.attCount) || 0]));
+				list.forEach(emailRow => {
+					emailRow.attList = [];
+					emailRow.attCount = countMap.get(emailRow.emailId) || 0;
+				});
+				return;
+			}
 
 			const attList = await attService.selectByEmailIds(c, emailIds);
 

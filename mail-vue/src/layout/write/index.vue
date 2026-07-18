@@ -114,6 +114,7 @@ import dayjs from "dayjs";
 import {useI18n} from "vue-i18n";
 import {ElMessageBox} from "element-plus";
 import {getSendLimitViolation, SEND_LIMITS} from "@/layout/write/send-limits.js";
+import {saveDraft} from "@/db/draft-repository.js";
 
 defineExpose({
   open,
@@ -648,12 +649,13 @@ function close() {
     type: 'warning',
     distinguishCancelAndClose: true
   }).then(async () => {
-    const formData = {...toRaw(form)};
-    delete formData.draftId
-    delete formData.attachments
+    const formData = {
+      ...toRaw(form),
+      receiveEmail: [...form.receiveEmail],
+      attachments: form.attachments.map(item => ({...toRaw(item)}))
+    };
     formData.createTime = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
-    const draftId = await db.value.draft.add({...formData})
-    db.value.att.add({draftId, attachments: toRaw(form.attachments)})
+    await saveDraft(db.value, formData)
     draftStore.refreshList++
     show.value = false
     await nextTick(() => {

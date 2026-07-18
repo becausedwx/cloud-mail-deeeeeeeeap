@@ -30,6 +30,11 @@ import {defineOptions, ref, watch, toRaw} from "vue";
 import {useUiStore} from "@/store/ui.js";
 import {userDraftStore} from "@/store/draft.js";
 import db from "@/db/db.js"
+import {
+  deleteDrafts,
+  getDraftAttachments,
+  saveDraft
+} from "@/db/draft-repository.js";
 
 defineOptions({
   name: 'draft'
@@ -40,23 +45,12 @@ const uiStore = useUiStore();
 const scroll = ref({})
 
 watch(() => draftStore.setDraft, async () => {
-
   const draft = toRaw(draftStore.setDraft)
-  const draftId = draft.draftId
-  const attachments = toRaw(draftStore.setDraft.attachments)
-
-  delete draft.draftId
-  delete draft.attachments
-
-  if (!draft.content && !draft.subject && !(draft.receiveEmail.length > 0)) {
-    await db.value.draft.delete(draftId);
-    await db.value.att.delete(draftId);
-    draftStore.refreshList++
-    return;
-  }
-
-  await db.value.draft.update(draftId, draft);
-  await db.value.att.update(draftId, {attachments: attachments});
+  await saveDraft(db.value, {
+    ...draft,
+    receiveEmail: [...(draft.receiveEmail || [])],
+    attachments: (draft.attachments || []).map(item => ({...toRaw(item)}))
+  })
   draftStore.refreshList++
 }, {
   deep: true
@@ -78,13 +72,12 @@ function getEmailList() {
 }
 
 async function deleteDraft(draftIds) {
-  await db.value.draft.bulkDelete(draftIds);
+  await deleteDrafts(db.value, draftIds);
   draftStore.refreshList++
 }
 
 async function jumpContent(email) {
-  const att = await db.value.att.get(email.draftId)
-  email.attachments = att.attachments
+  email.attachments = await getDraftAttachments(db.value, email.draftId)
   uiStore.writerRef.openDraft(email);
 }
 

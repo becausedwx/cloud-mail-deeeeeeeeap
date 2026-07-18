@@ -119,6 +119,7 @@ vi.mock('../src/service/att-service', () => ({
 		saveSendAtt: vi.fn(async () => {
 			mockState.operationLog.push({ type: 'saveSendAtt' });
 		}),
+		countByEmailIds: vi.fn(async () => []),
 		selectByEmailIds: vi.fn(async () => [])
 	}
 }));
@@ -201,6 +202,45 @@ function createDbRecorder(selectRows = [], onRun = null) {
 		}
 	};
 }
+
+describe('email list attachment projection', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it('returns only attachment counts for lite rows without loading attachment metadata', async () => {
+		attService.countByEmailIds.mockResolvedValueOnce([
+			{ emailId: 41, attCount: 2 }
+		]);
+		const list = [{ emailId: 41 }, { emailId: 42 }];
+
+		await emailService.emailAddAtt({ env: {} }, list, { lite: true });
+
+		expect(attService.countByEmailIds).toHaveBeenCalledWith({ env: {} }, [41, 42]);
+		expect(attService.selectByEmailIds).not.toHaveBeenCalled();
+		expect(list).toEqual([
+			{ emailId: 41, attCount: 2, attList: [] },
+			{ emailId: 42, attCount: 0, attList: [] }
+		]);
+	});
+
+	it('keeps full attachment metadata for detail rows', async () => {
+		attService.selectByEmailIds.mockResolvedValueOnce([
+			{ emailId: 51, filename: 'report.pdf', size: 4096 }
+		]);
+		const list = [{ emailId: 51 }];
+
+		await emailService.emailAddAtt({ env: {} }, list);
+
+		expect(attService.countByEmailIds).not.toHaveBeenCalled();
+		expect(attService.selectByEmailIds).toHaveBeenCalled();
+		expect(list).toEqual([{
+			emailId: 51,
+			attCount: 1,
+			attList: [{ emailId: 51, filename: 'report.pdf', size: 4096 }]
+		}]);
+	});
+});
 
 describe('email service status synchronization', () => {
 	beforeEach(() => {

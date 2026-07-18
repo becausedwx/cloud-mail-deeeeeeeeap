@@ -259,6 +259,10 @@ import {
   getSessionGeneration,
   registerSessionResetter
 } from "@/session/auth-session.js";
+import {
+  createDetailCache,
+  loadCachedDetail
+} from "@/components/email-scroll/detail-cache.js";
 
 const props = defineProps({
   getEmailList: Function,
@@ -349,8 +353,10 @@ const position = ref(
       y: 0,
     })
 )
-const detailCache = new Map();
-const DETAIL_CACHE_LIMIT = 100;
+const detailCache = createDetailCache({
+  maxEntries: 100,
+  maxBytes: 8 * 1024 * 1024
+});
 const unregisterSessionResetter = registerSessionResetter(resetEmailSessionState)
 
 const triggerRef = ref({
@@ -515,11 +521,13 @@ watch(() => emailStore.addStarEmailId, () => {
 })
 
 async function openReply(email) {
-  uiStore.writerRef.openReply(await resolveEmailDetail(email))
+  const resolvedEmail = await resolveEmailDetail(email)
+  if (resolvedEmail) uiStore.writerRef?.openReply(resolvedEmail)
 }
 
 async function openForward(email) {
-  uiStore.writerRef.openForward(await resolveEmailDetail(email))
+  const resolvedEmail = await resolveEmailDetail(email)
+  if (resolvedEmail) uiStore.writerRef?.openForward(resolvedEmail)
 }
 
 async function resolveEmailDetail(email) {
@@ -527,32 +535,19 @@ async function resolveEmailDetail(email) {
     return email;
   }
   const detail = await getCachedEmailDetail(email.emailId);
+  if (!detail) return null;
   Object.assign(email, detail);
   return email;
 }
 
 async function getCachedEmailDetail(emailId) {
-  if (detailCache.has(emailId)) {
-    return detailCache.get(emailId);
-  }
-
-  const promise = props.getEmailDetail(emailId).catch(error => {
-    detailCache.delete(emailId);
-    throw error;
-  });
-  detailCache.set(emailId, promise);
-  trimDetailCache();
-
-  const detail = await promise;
-  detailCache.set(emailId, detail);
-  trimDetailCache();
-  return detail;
-}
-
-function trimDetailCache() {
-  while (detailCache.size > DETAIL_CACHE_LIMIT) {
-    detailCache.delete(detailCache.keys().next().value);
-  }
+  const requestGeneration = getSessionGeneration()
+  return loadCachedDetail({
+    cache: detailCache,
+    key: emailId,
+    load: () => props.getEmailDetail(emailId),
+    isCurrent: () => requestGeneration === getSessionGeneration()
+  })
 }
 
 let preloadTimer = null;

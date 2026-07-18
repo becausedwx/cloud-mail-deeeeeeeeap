@@ -5,7 +5,6 @@ import BizError from '../error/biz-error';
 import { and, desc, eq, lt, sql, inArray } from 'drizzle-orm';
 import email from '../entity/email';
 import { isDel } from '../const/entity-const';
-import attService from "./att-service";
 import { t } from '../i18n/i18n'
 import { chunkArray } from '../utils/sql-utils';
 
@@ -109,20 +108,9 @@ const starService = {
 			.limit(size)
 			.all();
 
-		const emailIds = list.map(item => item.emailId);
-		const attsList = await attService.selectByEmailIds(c, emailIds);
-		const attMap = new Map();
-
-		attsList.forEach(attRow => {
-			const atts = attMap.get(attRow.emailId) || [];
-			atts.push(attRow);
-			attMap.set(attRow.emailId, atts);
-		});
+		await emailService.emailAddAtt(c, list, { lite });
 
 		list.forEach(emailRow => {
-			const atts = attMap.get(emailRow.emailId) || [];
-			emailRow.attList = atts;
-			emailRow.attCount = atts.length;
 			emailRow.previewText = previewText(emailRow);
 		});
 

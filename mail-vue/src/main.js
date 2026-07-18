@@ -18,17 +18,21 @@ import {useSendStore} from "@/store/send.js";
 import {useUiStore} from "@/store/ui.js";
 import {useUserStore} from "@/store/user.js";
 import {useWriterStore} from "@/store/writer.js";
+import {closeDraftDatabase, initializeDraftDatabase} from "@/db/db.js";
 const pinia = createPinia().use(piniaPersistedState)
 import i18n from "@/i18n/index.js";
 const app = createApp(App).use(pinia)
+const userStore = useUserStore()
 
 configureAuthSession({
     storage: localStorage,
     navigateToLogin: () => router.replace({name: 'login'})
 })
+initializeDraftDatabase(userStore)
+registerSessionResetter(closeDraftDatabase)
 registerSessionResetter(() => resetAuthenticatedStores({
     accountStore: useAccountStore(),
-    userStore: useUserStore(),
+    userStore,
     emailStore: useEmailStore(),
     sendStore: useSendStore(),
     roleStore: useRoleStore(),

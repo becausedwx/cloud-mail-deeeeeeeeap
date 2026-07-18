@@ -1,25 +1,51 @@
-import Dexie from "dexie";
-import {useUserStore} from "@/store/user.js"
-import { watch, shallowRef } from "vue";
+import Dexie from 'dexie'
+import { shallowRef, watch } from 'vue'
+import { createDraftDatabaseController } from '@/db/draft-database-controller.js'
+import { cleanupOrphanDraftAttachments } from '@/db/draft-repository.js'
 
-const userStore = useUserStore();
+const db = shallowRef({})
+let stopUserWatch = null
 
-
-let db =  shallowRef({})
-
-function createDB() {
-    db.value = new Dexie(userStore.user.email);
-    db.value.version(1).stores({
-        draft: '++draftId,createTime'
+const controller = createDraftDatabaseController({
+  createDatabase(identity) {
+    const database = new Dexie(identity)
+    database.version(1).stores({
+      draft: '++draftId,createTime',
+      att: 'draftId'
     })
+    return database
+  },
+  async cleanup(database) {
+    try {
+      await cleanupOrphanDraftAttachments(database)
+    } catch (error) {
+      console.error('Draft attachment cleanup failed', error)
+    }
+  },
+  onChange(database) {
+    db.value = database || {}
+  }
+})
 
-    db.value.version(1).stores({
-        att: 'draftId'
+export function initializeDraftDatabase(userStore) {
+  if (stopUserWatch) return
+
+  const switchDatabase = identity => {
+    controller.switchTo(identity).catch(error => {
+      console.error('Draft database initialization failed', error)
     })
+  }
+
+  switchDatabase(userStore.user.email)
+  stopUserWatch = watch(
+    () => userStore.user.email,
+    switchDatabase,
+    { flush: 'sync' }
+  )
 }
 
-createDB()
+export function closeDraftDatabase() {
+  controller.close()
+}
 
-watch(() => userStore.user.email,() => createDB())
-
-export default db;
+export default db
