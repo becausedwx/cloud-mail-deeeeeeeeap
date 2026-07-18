@@ -6,7 +6,7 @@
     <loading v-else/>
   </div>
   <el-scrollbar v-else style="height: 100%;">
-    <div class="analysis" :key="boxKey">
+    <div class="analysis">
       <div class="number">
         <div class="number-item">
           <div class="top">
@@ -96,13 +96,13 @@
               </el-radio-group>
             </span>
           </div>
-          <div class="sender-pie">
+          <div class="sender-pie" ref="senderPieElement">
 
           </div>
         </div>
         <div class="picture-item">
           <div class="title">{{ $t('userGrowth') }}</div>
-          <div class="increase-line">
+          <div class="increase-line" ref="increaseLineElement">
 
           </div>
         </div>
@@ -110,11 +110,11 @@
       <div class="picture-cs">
         <div class="picture-cs-item">
           <div class="title">{{ $t('emailGrowth') }}</div>
-          <div class="email-column"></div>
+        <div class="email-column" ref="emailColumnElement"></div>
         </div>
         <div class="picture-cs-item">
           <div class="title">{{ $t('sentToday') }}</div>
-          <div class="send-count"></div>
+        <div class="send-count" ref="sendGaugeElement"></div>
         </div>
       </div>
     </div>
@@ -124,16 +124,16 @@
 <script setup>
 import {Icon} from "@iconify/vue";
 import {useTransition} from "@vueuse/core";
-import {defineOptions, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch, computed} from "vue";
+import {defineOptions, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch, computed} from "vue";
 import echarts from "@/echarts/index.js";
 import dayjs from "dayjs";
 import {analysisEcharts} from "@/request/analysis.js";
 import {useUiStore} from "@/store/ui.js";
-import {debounce} from "@/utils/debounce.js";
 import loading from "@/components/loading/index.vue";
 import {useRoute} from "vue-router";
 import {useI18n} from 'vue-i18n';
 import {formatSenderTooltip} from './tooltip.js';
+import {createChartRuntime} from './chart-runtime.js';
 
 defineOptions({
   name: 'analysis'
@@ -190,6 +190,14 @@ const emailColumnData = {
   daysData: []
 }
 
+const senderPieElement = ref(null)
+const increaseLineElement = ref(null)
+const emailColumnElement = ref(null)
+const sendGaugeElement = ref(null)
+const chartRuntime = createChartRuntime({
+  createChart: element => echarts.init(element)
+})
+
 const topic = computed(() => ({
   color: uiStore.dark ? '#E5EAF3' : '#303133',
   background: uiStore.dark ? '#141414' : '#FFFFFF',
@@ -202,18 +210,14 @@ const topic = computed(() => ({
   containerBackground: uiStore.dark ? '#6C6E72' : '#E6EBF8'
 }))
 let daySendTotal = 0
-let leaveWidth = 0
-let senderPie = null
-let increaseLine = null
-let emailColumn = null
-let sendGauge = null
-let first = true
-let boxKey = ref(0)
-let senderPieLeft = window.innerWidth < 500 ? `${window.innerWidth - 110}` : '72%'
-let analysisDark = uiStore.dark
+let chartRevision = 0
+let optionDirty = false
+let dataReady = false
+let pageActive = true
+let unmounted = false
 
 onMounted(() => {
-  window.addEventListener('resize', handleResize)
+  chartRuntime.activate(chartElements())
   loadAnalysis()
 })
 
@@ -226,6 +230,7 @@ function loadAnalysis() {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   analysisEcharts(timeZone).then(data => {
+    if (unmounted) return
     receiveTotal.value = data.numberCount.receiveTotal
     sendTotal.value = data.numberCount.sendTotal
     accountTotal.value = data.numberCount.accountTotal
@@ -252,72 +257,65 @@ function loadAnalysis() {
     emailColumnData.receiveData = data.emailDayCount.receiveDayCount.map(item => item.total)
     emailColumnData.sendData = data.emailDayCount.sendDayCount.map(item => item.total)
     daySendTotal = data.daySendTotal
+    dataReady = true
+    chartRevision++
+    optionDirty = true
     analysisLoading.value = false
-    initPicture();
-    first = false
+    nextTick(() => {
+      if (!pageActive || unmounted) return
+      chartRuntime.activate(chartElements())
+      updateCharts()
+    })
   }).catch(e => {
     console.error('统计数据加载失败', e)
     loadFailed.value = true
   })
 }
 
-const widthChange = debounce(initPicture, 500, {
-  leading: false,
-  trailing: true
-})
-
-
 watch(() => uiStore.asideShow, () => {
   if (window.innerWidth > 1024) {
-    widthChange()
+    chartRuntime.scheduleResize()
   }
 })
 
 onActivated(() => {
-  if (first) return
-  if (window.innerWidth !== leaveWidth && leaveWidth !== 0) {
-    widthChange()
-  } else if (!senderPie) {
-    widthChange()
-  } else if (analysisDark !== uiStore.dark) {
-    initPicture()
-    analysisDark = uiStore.dark
-  }
+  pageActive = true
+  chartRuntime.activate(chartElements())
+  if (dataReady && optionDirty) updateCharts()
+  chartRuntime.scheduleResize()
 })
 
 onDeactivated(() => {
-  leaveWidth = window.innerWidth
+  pageActive = false
+  chartRuntime.deactivate()
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleResize)
+  unmounted = true
+  pageActive = false
+  chartRuntime.dispose()
 })
-
-function handleResize() {
-  setStyle()
-  widthChange()
-}
 
 watch(() => uiStore.dark, () => {
-  if (route.name !== 'analysis') return
-  analysisDark = uiStore.dark
-  initPicture()
+  chartRevision++
+  optionDirty = true
+  if (dataReady && pageActive && route.name === 'analysis') {
+    nextTick(updateCharts)
+  }
 })
 
-function initPicture() {
-  if (route.name !== 'analysis') return
-  boxKey.value++
-  setTimeout(() => {
-    createSenderPie()
-    createIncreaseLine()
-    createEmailColumnChart();
-    createSendGauge();
-  })
+function chartElements() {
+  return [senderPieElement.value, increaseLineElement.value, emailColumnElement.value, sendGaugeElement.value]
+    .filter(Boolean)
 }
 
-function setStyle() {
-  senderPieLeft = window.innerWidth < 500 ? `${window.innerWidth - 110}` : '72%'
-  emailColumnData.barWidth = window.innerWidth > 767 ? '40%' : '60%'
+function updateCharts() {
+  if (route.name !== 'analysis') return
+  createSenderPie()
+  createIncreaseLine()
+  createEmailColumnChart();
+  createSendGauge();
+  optionDirty = false
 }
 
 const measureCtx = document.createElement('canvas').getContext('2d');
@@ -339,11 +337,6 @@ function truncateTextByWidth(text, maxWidth = 140) {
 }
 
 function createSenderPie() {
-
-  if (senderPie) {
-    senderPie.dispose()
-  }
-  senderPie = echarts.init(document.querySelector(".sender-pie"))
   let option = {
     tooltip: {
       trigger: 'item',
@@ -371,7 +364,7 @@ function createSenderPie() {
         name: '',
         type: 'pie',
         radius: ['40%', '65%'],
-        center: [senderPieLeft, '45%'],
+        center: ['72%', '45%'],
         avoidLabelOverlap: false,
         itemStyle: {
           borderRadius: 4,
@@ -399,17 +392,10 @@ function createSenderPie() {
       }
     ]
   }
-  senderPie.setOption(option)
+  chartRuntime.setOption('senderPie', senderPieElement.value, option, chartRevision)
 }
 
 function createIncreaseLine() {
-
-  if (increaseLine) {
-    increaseLine.dispose()
-  }
-
-  increaseLine = echarts.init(document.querySelector(".increase-line"))
-
   let option = {
     tooltip: {
       trigger: 'axis', // 设置触发方式为 'axis'，在坐标轴上显示信息
@@ -541,7 +527,14 @@ function createIncreaseLine() {
       }
     ]
   };
-  increaseLine.setOption(option);
+  const changed = chartRuntime.setOption(
+    'increaseLine',
+    increaseLineElement.value,
+    option,
+    chartRevision
+  );
+  const increaseLine = chartRuntime.getChart('increaseLine')
+  if (!changed || !increaseLine) return
 
   let max = increaseLine.getModel().getComponent('yAxis', 0).axis.scale.getExtent()[1];
 
@@ -560,13 +553,6 @@ function createIncreaseLine() {
 }
 
 function createEmailColumnChart() {
-
-  if (emailColumn) {
-    emailColumn.dispose()
-  }
-
-  emailColumn = echarts.init(document.querySelector(".email-column"));
-
   const option = {
     tooltip: {
       textStyle: {
@@ -666,14 +652,10 @@ function createEmailColumnChart() {
     ]
   };
 
-  emailColumn.setOption(option);
+  chartRuntime.setOption('emailColumn', emailColumnElement.value, option, chartRevision);
 }
 
 function createSendGauge() {
-  if (sendGauge) {
-    sendGauge.dispose()
-  }
-  sendGauge = echarts.init(document.querySelector(".send-count"));
   let option = {
     tooltip: {
       textStyle: {
@@ -737,7 +719,7 @@ function createSendGauge() {
     }],
     color: ['#3CB2FF']
   };
-  sendGauge.setOption(option);
+  chartRuntime.setOption('sendGauge', sendGaugeElement.value, option, chartRevision);
 }
 
 

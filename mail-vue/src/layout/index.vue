@@ -27,15 +27,25 @@ import Header from '@/layout/header/index.vue'
 import Main from '@/layout/main/index.vue'
 import { ref, onMounted, onBeforeUnmount, nextTick, shallowRef } from 'vue'
 import {useUiStore} from "@/store/ui.js";
+import {createWriterIntentLoader} from '@/layout/writer-intent-loader.js'
+import {getSessionGeneration} from '@/session/auth-session.js'
 
 const uiStore = useUiStore();
 const WriterComponent = shallowRef(null)
 const writerMounted = ref(false)
 const writerRef = ref(null)
 const isMobile = ref(window.innerWidth < 1025)
-let writerLoadPromise = null
+const writerIntentLoader = createWriterIntentLoader({
+  loadShell: () => import('@/layout/write/index.vue').then(module => {
+    WriterComponent.value = module.default
+    return module.default
+  }),
+  loadEditor: () => import('@/components/tiny-editor/loader.js')
+    .then(module => module.loadTinyMCE())
+})
 
 const writerApi = {
+  preload: () => writerIntentLoader.preload(),
   open: (...args) => callWriter('open', ...args),
   openReply: (...args) => callWriter('openReply', ...args),
   openForward: (...args) => callWriter('openForward', ...args),
@@ -49,10 +59,7 @@ const handleResize = () => {
 
 async function loadWriter() {
   if (!WriterComponent.value) {
-    writerLoadPromise ||= import('@/layout/write/index.vue').then(module => {
-      WriterComponent.value = module.default
-    })
-    await writerLoadPromise
+    await writerIntentLoader.loadShell()
   }
 
   writerMounted.value = true
@@ -61,7 +68,10 @@ async function loadWriter() {
 }
 
 async function callWriter(method, ...args) {
+  const generation = getSessionGeneration()
+  writerIntentLoader.loadEditor().catch(() => {})
   const writer = await loadWriter()
+  if (generation !== getSessionGeneration()) return null
   writer?.[method]?.(...args)
 }
 

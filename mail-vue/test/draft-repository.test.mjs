@@ -4,6 +4,8 @@ import {
   cleanupOrphanDraftAttachments,
   deleteDrafts,
   getDraftAttachments,
+  getDraftForEditing,
+  listDraftPage,
   saveDraft
 } from '../src/db/draft-repository.js'
 
@@ -84,6 +86,59 @@ function createMemoryDraftDb() {
   db.draft = table('draft', 'draftId')
   db.att = table('att', 'draftId')
   return db
+}
+
+function createPagingDraftDb(rows) {
+  const stats = { valueReads: [], attachmentReads: 0 }
+
+  function collection(source) {
+    let values = [...source]
+    let limitSize = null
+    return {
+      reverse() {
+        values.reverse()
+        return this
+      },
+      limit(size) {
+        limitSize = size
+        return this
+      },
+      async toArray() {
+        const result = values.slice(0, limitSize ?? values.length).map(row => structuredClone(row))
+        stats.valueReads.push(result.length)
+        return result
+      },
+      async primaryKeys() {
+        return values.slice(0, limitSize ?? values.length).map(row => row.draftId)
+      }
+    }
+  }
+
+  return {
+    stats,
+    draft: {
+      orderBy(key) {
+        assert.equal(key, 'draftId')
+        return collection([...rows].sort((a, b) => a.draftId - b.draftId))
+      },
+      where(key) {
+        assert.equal(key, 'draftId')
+        return {
+          below(cursor) {
+            return collection(
+              rows.filter(row => row.draftId < cursor).sort((a, b) => a.draftId - b.draftId)
+            )
+          }
+        }
+      }
+    },
+    att: {
+      async get() {
+        stats.attachmentReads++
+        return null
+      }
+    }
+  }
 }
 
 test('creating a draft rolls back when its attachments cannot be stored', async () => {
@@ -167,4 +222,65 @@ test('a legacy draft without an attachment row opens with an empty attachment li
   const db = createMemoryDraftDb()
 
   assert.deepEqual(await getDraftAttachments(db, 7), [])
+})
+
+test('draft pages use a stable draftId cursor and retain at most 50 lite rows', async () => {
+  const rows = Array.from({length: 51}, (_, index) => ({
+    draftId: index + 1,
+    emailId: 9000 + index,
+    subject: `draft ${index + 1}`,
+    content: `<p>${'private body '.repeat(200)}</p>`,
+    text: `preview ${index + 1}`,
+    receiveEmail: ['friend@example.com'],
+    createTime: `2026-07-18 00:00:${String(index).padStart(2, '0')}`
+  }))
+  const db = createPagingDraftDb(rows)
+
+  const first = await listDraftPage(db, {size: 50})
+  const second = await listDraftPage(db, {cursor: first.list.at(-1).emailId, size: 50})
+
+  assert.deepEqual(first.list.map(row => row.draftId), Array.from({length: 50}, (_, i) => 51 - i))
+  assert.equal(first.hasMore, true)
+  assert.deepEqual(second.list.map(row => row.draftId), [1])
+  assert.equal(second.hasMore, false)
+  assert.equal(first.list.every(row => row.emailId === row.draftId), true)
+  assert.equal(first.list.every(row => !('content' in row) && !('text' in row)), true)
+  assert.equal(db.stats.attachmentReads, 0)
+  assert.deepEqual(db.stats.valueReads, [50, 1])
+})
+
+test('opening a draft reads its full record and only its own attachments in one transaction', async () => {
+  const db = createMemoryDraftDb()
+  db.state.draft.set(7, {
+    draftId: 7,
+    emailId: 42,
+    subject: 'reply draft',
+    content: '<p>complete body</p>'
+  })
+  db.state.att.set(7, {
+    draftId: 7,
+    attachments: [{filename: 'only-this.pdf'}]
+  })
+
+  assert.deepEqual(await getDraftForEditing(db, 7), {
+    draftId: 7,
+    emailId: 42,
+    subject: 'reply draft',
+    content: '<p>complete body</p>',
+    attachments: [{filename: 'only-this.pdf'}]
+  })
+  assert.equal(await getDraftForEditing(db, 8), null)
+})
+
+test('draft pagination handles empty, one-row and exact-page boundaries', async () => {
+  for (const count of [0, 1, 50]) {
+    const rows = Array.from({length: count}, (_, index) => ({
+      draftId: index + 1,
+      subject: `draft ${index + 1}`,
+      text: 'preview'
+    }))
+    const page = await listDraftPage(createPagingDraftDb(rows), {size: 50})
+    assert.equal(page.list.length, count)
+    assert.equal(page.hasMore, false)
+  }
 })

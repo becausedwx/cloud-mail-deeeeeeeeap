@@ -115,7 +115,7 @@ const emailSearchService = {
 	hasSearchParams,
 
 	async allList(c, params, options) {
-		const { size, emailId, timeSort, withTotal } = options;
+		const { size, emailId, timeSort, withTotal, withLatest = true } = options;
 		const conditions = buildConditions(params, emailId, timeSort);
 		const order = timeSort ? 'ASC' : 'DESC';
 
@@ -134,13 +134,13 @@ const emailSearchService = {
 				? c.env.db.prepare(`SELECT COUNT(*) AS total FROM email_search s WHERE ${conditions.count.sql}`).bind(...conditions.count.binds).first()
 				: Promise.resolve({ total: 0 });
 
-			const latestPromise = c.env.db.prepare(`
+			const latestPromise = withLatest ? c.env.db.prepare(`
 				SELECT email_id AS emailId, account_id AS accountId, user_id AS userId
 				FROM email
 				WHERE type = ? AND status != ?
 				ORDER BY email_id DESC
 				LIMIT 1
-			`).bind(emailConst.type.RECEIVE, emailConst.status.SAVING).first();
+			`).bind(emailConst.type.RECEIVE, emailConst.status.SAVING).first() : Promise.resolve(null);
 
 			const [listResult, totalRow, latestEmail] = await Promise.all([listPromise, totalPromise, latestPromise]);
 			let list = listResult.results || [];

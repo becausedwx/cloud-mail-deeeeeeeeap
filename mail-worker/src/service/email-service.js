@@ -232,6 +232,7 @@ const emailService = {
 		let { emailId, type, accountId, size, timeSort, allReceive } = params;
 		const lite = toBoolFlag(params.lite);
 		const withTotal = toBoolFlag(params.withTotal, true);
+		const withLatest = toBoolFlag(params.withLatest, true);
 
 		size = normalizePageSize(size);
 		emailId = Number(emailId);
@@ -304,7 +305,7 @@ const emailService = {
 				)
 		).get() : Promise.resolve({ total: 0 });
 
-		const latestEmailQuery = orm(c).select({
+		const latestEmailQuery = withLatest ? orm(c).select({
 			emailId: email.emailId,
 			accountId: email.accountId,
 			userId: email.userId
@@ -315,7 +316,7 @@ const emailService = {
 				eq(email.type, type),
 				eq(email.isDel, isDel.NORMAL)
 			))
-			.orderBy(desc(email.emailId)).limit(1).get();
+			.orderBy(desc(email.emailId)).limit(1).get() : Promise.resolve(null);
 
 		let [list, totalRow, latestEmail] = await Promise.all([listQuery, totalQuery, latestEmailQuery]);
 
@@ -331,7 +332,7 @@ const emailService = {
 
 		await this.emailAddAtt(c, list, { lite });
 
-		if (!latestEmail) {
+		if (withLatest && !latestEmail) {
 			latestEmail = {
 				emailId: 0,
 				accountId: accountId,
@@ -339,7 +340,9 @@ const emailService = {
 			}
 		}
 
-		return { list, total: totalRow.total, latestEmail, hasMore };
+		const result = { list, total: totalRow.total, hasMore };
+		if (withLatest) result.latestEmail = latestEmail;
+		return result;
 	},
 
 	async delete(c, params, userId) {
@@ -1339,6 +1342,7 @@ const emailService = {
 		let { emailId, size, name, subject, accountEmail, userEmail, searchText, type, timeSort } = params;
 		const lite = toBoolFlag(params.lite);
 		const withTotal = toBoolFlag(params.withTotal, true);
+		const withLatest = toBoolFlag(params.withLatest, true);
 
 		size = normalizePageSize(size);
 
@@ -1356,7 +1360,7 @@ const emailService = {
 		}
 
 		if (emailSearchService.hasSearchParams(params)) {
-			const searchData = await emailSearchService.allList(c, params, { size, emailId, timeSort, withTotal });
+			const searchData = await emailSearchService.allList(c, params, { size, emailId, timeSort, withTotal, withLatest });
 			if (searchData) {
 				let { list, totalRow, latestEmail, hasMore } = searchData;
 
@@ -1366,7 +1370,7 @@ const emailService = {
 					previewText: previewText(item)
 				}));
 
-				if (!latestEmail) {
+				if (withLatest && !latestEmail) {
 					latestEmail = {
 						emailId: 0,
 						accountId: 0,
@@ -1374,7 +1378,9 @@ const emailService = {
 					}
 				}
 
-				return { list: list, total: totalRow.total, latestEmail, hasMore };
+				const result = { list, total: totalRow.total, hasMore };
+				if (withLatest) result.latestEmail = latestEmail;
+				return result;
 			}
 		}
 
@@ -1450,7 +1456,7 @@ const emailService = {
 
 		const listQuery = query.limit(size + 1).all();
 		const totalQuery = withTotal ? queryCount.get() : queryCount;
-		const latestEmailQuery = orm(c).select({
+		const latestEmailQuery = withLatest ? orm(c).select({
 			emailId: email.emailId,
 			accountId: email.accountId,
 			userId: email.userId
@@ -1459,7 +1465,7 @@ const emailService = {
 				eq(email.type, emailConst.type.RECEIVE),
 				ne(email.status, emailConst.status.SAVING)
 			))
-			.orderBy(desc(email.emailId)).limit(1).get();
+			.orderBy(desc(email.emailId)).limit(1).get() : Promise.resolve(null);
 
 		let [list, totalRow, latestEmail] = await Promise.all([listQuery, totalQuery, latestEmailQuery]);
 
@@ -1472,7 +1478,7 @@ const emailService = {
 			previewText: previewText(item)
 		}));
 
-		if (!latestEmail) {
+		if (withLatest && !latestEmail) {
 			latestEmail = {
 				emailId: 0,
 				accountId: 0,
@@ -1480,7 +1486,9 @@ const emailService = {
 			}
 		}
 
-		return { list: list, total: totalRow.total, latestEmail, hasMore };
+		const result = { list, total: totalRow.total, hasMore };
+		if (withLatest) result.latestEmail = latestEmail;
+		return result;
 	},
 
 	async allEmailLatest(c, params) {

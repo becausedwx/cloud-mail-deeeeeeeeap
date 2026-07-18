@@ -11,11 +11,22 @@ import loading from "@/components/loading/index.vue";
 import {useI18n} from 'vue-i18n'
 import {useUiStore} from '@/store/ui.js'
 import {useSettingStore} from '@/store/setting.js'
+import {
+  assetUrl,
+  createRetryableInitTask,
+  loadTinyMCE
+} from '@/components/tiny-editor/loader.js'
+import {createEditorContentSync} from '@/components/tiny-editor/content-sync.js'
+import {getSessionGeneration} from '@/session/auth-session.js'
 
 defineExpose({
   clearEditor,
   focus,
-  getContent
+  getContent,
+  getContentSnapshot,
+  flushContentSync,
+  cancelContentSync,
+  ensureReady: initTinyMCE
 })
 
 const props = defineProps({
@@ -40,29 +51,44 @@ const uiStore = useUiStore();
 const settingStore = useSettingStore();
 let initToken = 0;
 let pendingFocus = false;
+let preservedContent = null;
 
-function assetUrl(path) {
-  const base = import.meta.env.BASE_URL || '/';
-  return `${base.replace(/\/?$/, '/')}${path.replace(/^\//, '')}`;
-}
+const contentSync = createEditorContentSync({
+  getGeneration: getSessionGeneration,
+  read: getContentSnapshot,
+  publish: ({content, text}) => emit('change', content, text),
+  onError: error => console.warn('TinyMCE 内容同步失败', error)
+})
+const initTask = createRetryableInitTask(() => initializeTinyMCE()
+  .catch(error => {
+    showLoading.value = false;
+    console.warn('TinyMCE 初始化失败', error);
+    return null;
+  }))
 
 onMounted(() => {
   initTinyMCE();
 });
 
 onBeforeUnmount(() => {
+  contentSync.cancel();
+  initTask.cancel();
   destroyEditor();
 });
 
 watch(() => props.defValue, (newValue) => {
+  contentSync.cancel();
+  preservedContent = null;
   if (editor.value && editor.value.getContent() !== newValue) {
     editor.value.setContent(newValue);
   }
 });
 
 watch(() => [uiStore.dark, settingStore.lang], () => {
+  flushContentSync();
+  preservedContent = editor.value?.getContent() ?? preservedContent;
   destroyEditor();
-  initTinyMCE();
+  initTask.restart();
 });
 
 // 对应 public/tinymce/langs 下的语言包文件名，en 为 TinyMCE 内置
@@ -75,12 +101,19 @@ const TINYMCE_LANGS = {
 const language = computed(() => TINYMCE_LANGS[locale.value] || 'en')
 
 function clearEditor() {
+  contentSync.cancel();
+  preservedContent = null;
   if (editor.value) {
     editor.value.setContent('');
   }
 }
 
-async function initTinyMCE() {
+function initTinyMCE() {
+  if (editor.value && isInitialized.value) return Promise.resolve(editor.value);
+  return initTask.start();
+}
+
+async function initializeTinyMCE() {
   const token = ++initToken;
   showLoading.value = !window.tinymce;
 
@@ -101,32 +134,8 @@ async function initTinyMCE() {
   initEditor();
 }
 
-function loadTinyMCE() {
-  if (window.tinymce) {
-    return Promise.resolve(window.tinymce);
-  }
-
-  if (window.__cloudMailTinyMCELoadPromise) {
-    return window.__cloudMailTinyMCELoadPromise;
-  }
-
-  window.__cloudMailTinyMCELoadPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = assetUrl('tinymce/tinymce.min.js');
-    script.async = true;
-    script.onload = () => window.tinymce ? resolve(window.tinymce) : reject(new Error('TinyMCE not available'));
-    script.onerror = () => {
-      window.__cloudMailTinyMCELoadPromise = null;
-      reject(new Error('TinyMCE script failed to load'));
-    };
-    document.head.appendChild(script);
-  });
-
-  return window.__cloudMailTinyMCELoadPromise;
-}
-
 function initEditor() {
-  if (!window.tinymce || !editorRef.value) {
+  if (!window.tinymce || !editorRef.value || editor.value) {
     return;
   }
 
@@ -134,7 +143,6 @@ function initEditor() {
     selector: `#${props.editorId}`,
     statusbar: false,
     height: "100%",
-    auto_focus: true,
     //relative_urls: false,  //阻止 img标签域名和网站域名相同 自动把链接转换相对路径
     //remove_script_host: false, // 阻止删除 URL 中的域名
     forced_root_block: 'div',
@@ -157,23 +165,23 @@ function initEditor() {
     setup: (ed) => {
       editor.value = ed;
       ed.on('init', () => {
-        ed.setContent(props.defValue);
+        ed.setContent(preservedContent ?? props.defValue);
+        preservedContent = null;
         isInitialized.value = true;
         if (pendingFocus) {
           pendingFocus = false;
-          nextTick(() => ed.focus());
+          setTimeout(() => {
+            if (editor.value === ed && isInitialized.value) ed.focus();
+          });
         }
       });
       ed.on('input change', () => {
-        const content = ed.getContent();
-        const text = ed.getContent({format: 'text'});
-        emit('change', content, text);
+        contentSync.markDirty();
       });
       ed.on('focus', () => {
         emit('focus', focus);
       })
     },
-    autofocus: true,
     branding: false,
     file_picker_types: 'image',
     image_dimensions: false,
@@ -206,8 +214,9 @@ function initEditor() {
 }
 
 function focus() {
-  if (!editor.value) {
+  if (!editor.value || !isInitialized.value) {
     pendingFocus = true;
+    initTinyMCE();
     return;
   }
 
@@ -218,6 +227,22 @@ function focus() {
 
 function getContent() {
   return editor.value?.getContent() || ''
+}
+
+function getContentSnapshot() {
+  if (!editor.value) return null
+  return {
+    content: editor.value.getContent() || '',
+    text: editor.value.getContent({format: 'text'}) || ''
+  }
+}
+
+function flushContentSync(options) {
+  return contentSync.flush(options)
+}
+
+function cancelContentSync() {
+  contentSync.cancel()
 }
 
 

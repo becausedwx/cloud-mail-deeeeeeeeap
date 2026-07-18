@@ -950,7 +950,7 @@ function getEmailList(refresh = false) {
   // 仅首屏/刷新(无游标)取 COUNT，翻页 withTotal=0 跳过总数统计
   const withTotal = emailId === 0 ? 1 : 0;
   const dataPromise = (!refresh && pagePrefetch.consume(pageKey))
-      || props.getEmailList(emailId, queryParam.size, withTotal);
+      || props.getEmailList(emailId, queryParam.size, withTotal, {withLatest: withTotal});
 
   dataPromise.then(async data => {
     if (!data || !requestCoordinator.isCurrent(request)) {
@@ -970,7 +970,9 @@ function getEmailList(refresh = false) {
       emailList.length = 0
     }
 
-    latestEmail.value = data.latestEmail
+    if (data.latestEmail) {
+      latestEmail.value = data.latestEmail
+    }
 
     handleList(list);
     emailList.push(...list);
@@ -1016,7 +1018,7 @@ function scheduleNextPagePrefetch(request) {
     key,
     load: signal => {
       if (!requestCoordinator.isCurrent(request)) return null
-      return props.getEmailList(nextEmailId, queryParam.size, 0, { signal })
+      return props.getEmailList(nextEmailId, queryParam.size, 0, { signal, withLatest: 0 })
     }
   });
 }

@@ -115,6 +115,8 @@ import {useI18n} from "vue-i18n";
 import {ElMessageBox} from "element-plus";
 import {getSendLimitViolation, SEND_LIMITS} from "@/layout/write/send-limits.js";
 import {saveDraft} from "@/db/draft-repository.js";
+import {registerSessionResetter} from '@/session/auth-session.js'
+import {stageProgrammaticWriterContent} from '@/layout/write/content-state.js'
 
 defineExpose({
   open,
@@ -158,6 +160,16 @@ const form = reactive({
   emailId: 0,
   attachments: [],
   draftId: null,
+})
+
+function flushEditorContent() {
+  return editor.value?.flushContentSync?.({force: true}) || null
+}
+
+const unregisterSessionResetter = registerSessionResetter(() => {
+  editor.value?.cancelContentSync?.()
+  show.value = false
+  resetForm()
 })
 
 const selectRecipientList = ref([])
@@ -347,6 +359,8 @@ function chooseFile() {
 
 async function sendEmail() {
 
+  flushEditorContent()
+
   if (form.receiveEmail.length === 0) {
     ElMessage({
       message: t('emptyRecipientMsg'),
@@ -473,9 +487,11 @@ function addRecipientRecord() {
 }
 
 function resetForm() {
+  editor.value?.cancelContentSync?.()
   form.receiveEmail = []
   form.subject = ''
   form.content = ''
+  form.text = ''
   form.manyType = null
   form.attachments = []
   form.sendType = ''
@@ -508,9 +524,12 @@ function openForward(email) {
   defValue.value = ''
 
   setTimeout(() => {
-    defValue.value = `
-      ${formatImage(email.content) || `<pre style="font-family: inherit;word-break: break-word;white-space: pre-wrap;margin: 0">${email.text}</pre>`}
-    `
+    stageProgrammaticWriterContent({form, defaultValue: defValue}, {
+      content: `
+        ${formatImage(email.content) || `<pre style="font-family: inherit;word-break: break-word;white-space: pre-wrap;margin: 0">${email.text}</pre>`}
+      `,
+      text: email.text || ''
+    })
     open()
 
     nextTick(() => {
@@ -543,17 +562,20 @@ function openReply(email) {
   defValue.value = ''
 
   setTimeout(() => {
-    defValue.value = `
-    <div></div>
-    <div>
-    <br>
-        ${formatDetailDate(email.createTime)} ${email.name} &lt${email.sendEmail}&gt ${t('wrote')}:
-    </div>
-    <blockquote class="mceNonEditable" style="margin: 0 0 0 0.8ex;border-left: 1px solid rgb(204,204,204);padding-left: 1ex;">
-      <articl>
-          ${formatImage(email.content) || `<pre style="font-family: inherit;word-break: break-word;white-space: pre-wrap;margin: 0">${email.text}</pre>`}
-      </article>
-    </blockquote>`
+    stageProgrammaticWriterContent({form, defaultValue: defValue}, {
+      content: `
+      <div></div>
+      <div>
+      <br>
+          ${formatDetailDate(email.createTime)} ${email.name} &lt${email.sendEmail}&gt ${t('wrote')}:
+      </div>
+      <blockquote class="mceNonEditable" style="margin: 0 0 0 0.8ex;border-left: 1px solid rgb(204,204,204);padding-left: 1ex;">
+        <articl>
+            ${formatImage(email.content) || `<pre style="font-family: inherit;word-break: break-word;white-space: pre-wrap;margin: 0">${email.text}</pre>`}
+        </article>
+      </blockquote>`,
+      text: email.text || ''
+    })
     open()
 
     nextTick(() => {
@@ -587,6 +609,7 @@ function open() {
 }
 
 function openDraft(draft) {
+  editor.value?.cancelContentSync?.()
   Object.assign(form, {...draft})
   defValue.value = ''
   setTimeout(() => defValue.value = form.content)
@@ -606,15 +629,15 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown);
+  editor.value?.cancelContentSync?.()
+  unregisterSessionResetter()
 });
 
 function close() {
 
-  if (selectStatus) openSelect();
+  flushEditorContent()
 
-  if (!form.content) {
-    form.content = editor.value?.getContent?.() || '';
-  }
+  if (selectStatus) openSelect();
 
   if (form.draftId) {
     draftStore.setDraft = {...toRaw(form)}

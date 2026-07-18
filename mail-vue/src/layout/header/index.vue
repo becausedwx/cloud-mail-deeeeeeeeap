@@ -4,7 +4,14 @@
       <hanburger @click="changeAside"></hanburger>
       <span class="breadcrumb-item">{{ $t(route.meta.title) }}</span>
     </div>
-    <div v-perm="'email:send'" class="writer-box" @click="openSend">
+    <div v-perm="'email:send'" class="writer-box"
+         role="button" tabindex="0"
+         :aria-label="$t('sendEmail')"
+         @pointerenter="preloadWriter"
+         @pointerdown="preloadWriter"
+         @focus="preloadWriter"
+         @keydown="handleWriterKeyDown"
+         @click="openSend">
       <div class="writer">
         <Icon icon="material-symbols:edit-outline-sharp" width="22" height="22"/>
       </div>
@@ -232,8 +239,23 @@ function switchDark(nextIsDark, root) {
   uiStore.dark = nextIsDark
 }
 
-function openSend() {
-  uiStore.writerRef.open()
+function preloadWriter() {
+  uiStore.writerRef?.preload?.().catch(() => {})
+}
+
+async function openSend() {
+  try {
+    await uiStore.writerRef?.open?.()
+  } catch (error) {
+    console.error('Failed to open the writer', error)
+  }
+}
+
+function handleWriterKeyDown(event) {
+  if (event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault()
+  preloadWriter()
+  openSend()
 }
 
 function changeAside() {

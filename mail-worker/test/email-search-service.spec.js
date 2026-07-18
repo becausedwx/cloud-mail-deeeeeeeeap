@@ -19,6 +19,12 @@ function createDbRecorder() {
 							},
 							async run() {
 								return { success: true };
+							},
+							async all() {
+								return {results: []};
+							},
+							async first() {
+								return null;
 							}
 						};
 						statements.push(statement);
@@ -107,5 +113,25 @@ describe('email search service', () => {
 		expect(batched).toHaveLength(3);
 		expect(Math.max(...batched.map(statement => statement.bindings.length))).toBeLessThanOrEqual(90);
 		expect(batched.flatMap(statement => statement.bindings)).toEqual(ids);
+	});
+
+	it('does not prepare total or latest queries for a search continuation page', async () => {
+		const recorder = createDbRecorder();
+
+		const result = await emailSearchService.allList(recorder.c, {subject: 'needle'}, {
+			size: 50,
+			emailId: 100,
+			timeSort: 0,
+			withTotal: false,
+			withLatest: false
+		});
+
+		expect(recorder.statements).toHaveLength(1);
+		expect(result).toEqual({
+			list: [],
+			totalRow: {total: 0},
+			latestEmail: null,
+			hasMore: false
+		});
 	});
 });

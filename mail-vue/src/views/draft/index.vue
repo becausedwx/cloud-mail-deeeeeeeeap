@@ -32,9 +32,12 @@ import {userDraftStore} from "@/store/draft.js";
 import {waitForDraftDatabase} from "@/db/db.js"
 import {
   deleteDrafts,
-  getDraftAttachments,
+  getDraftForEditing,
+  listDraftPage,
   saveDraft
 } from "@/db/draft-repository.js";
+import {getSessionGeneration} from '@/session/auth-session.js'
+import {loadDraftForSession} from './draft-session.js'
 
 defineOptions({
   name: 'draft'
@@ -59,17 +62,13 @@ watch(() => draftStore.setDraft, async () => {
 })
 
 watch(() => draftStore.refreshList, async () => {
-  const {list} = await getEmailList();
-    scroll.value.emailList.length = 0
-    scroll.value.handleList(list);
-    scroll.value.emailList.push(...list)
+  scroll.value.refreshList?.()
 })
 
-async function getEmailList() {
+async function getEmailList(emailId = 0, size = 50) {
   const database = await waitForDraftDatabase()
-  if (!database) return {list: []}
-  const list = await database.draft.orderBy('createTime').reverse().toArray()
-  return {list}
+  if (!database) return {list: [], hasMore: false}
+  return listDraftPage(database, {cursor: emailId, size})
 }
 
 async function deleteDraft(draftIds) {
@@ -80,10 +79,14 @@ async function deleteDraft(draftIds) {
 }
 
 async function jumpContent(email) {
-  const database = await waitForDraftDatabase()
-  if (!database) return
-  email.attachments = await getDraftAttachments(database, email.draftId)
-  uiStore.writerRef.openDraft(email);
+  const draft = await loadDraftForSession({
+    getDatabase: waitForDraftDatabase,
+    getDraft: getDraftForEditing,
+    getGeneration: getSessionGeneration,
+    draftId: email.draftId
+  })
+  if (!draft) return
+  await uiStore.writerRef?.openDraft?.(draft)
 }
 
 </script>

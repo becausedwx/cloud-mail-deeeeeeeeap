@@ -297,7 +297,13 @@ function jumpContent(email) {
 
 
 function getEmailList(emailId, size, withTotal = 1, options) {
-  return allEmailList({emailId, size, withTotal, ...params}, options)
+  return allEmailList({
+    emailId,
+    size,
+    withTotal,
+    withLatest: options?.withLatest ?? 1,
+    ...params
+  }, options)
 }
 
 // 组件卸载(如登出)时终止轮询循环，避免重复登录后累积多个常驻循环
