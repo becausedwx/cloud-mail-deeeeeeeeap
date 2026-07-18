@@ -73,7 +73,6 @@
 </template>
 
 <script setup>
-import router from "@/router";
 import hanburger from '@/components/hamburger/index.vue'
 import {logout} from "@/request/login.js";
 import {Icon} from "@iconify/vue";
@@ -85,6 +84,7 @@ import {useSettingStore} from "@/store/setting.js";
 import {hasPerm} from "@/perm/perm.js"
 import {useI18n} from "vue-i18n";
 import {setExtend} from "@/utils/day.js"
+import {clearAuthSession} from "@/session/auth-session.js";
 
 const {t} = useI18n();
 const route = useRoute();
@@ -240,14 +240,16 @@ function changeAside() {
   uiStore.asideShow = !uiStore.asideShow
 }
 
-function clickLogout() {
+async function clickLogout() {
   logoutLoading.value = true
-  logout().then(() => {
-    localStorage.removeItem("token")
-    router.replace('/login')
-  }).finally(() => {
+  try {
+    await logout()
+  } finally {
+    if (localStorage.getItem('token')) {
+      await clearAuthSession()
+    }
     logoutLoading.value = false
-  })
+  }
 }
 
 function formatName(email) {

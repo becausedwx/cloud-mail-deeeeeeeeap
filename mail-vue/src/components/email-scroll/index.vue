@@ -254,6 +254,11 @@ import {EmailUnreadEnum} from "@/enums/email-enum.js";
 import { UseVirtualList } from '@vueuse/components'
 import { useScroll } from '@vueuse/core'
 import {sanitizeHtml} from "@/utils/html-sanitize.js";
+import {createRequestCoordinator} from "@/components/email-scroll/request-coordinator.js";
+import {
+  getSessionGeneration,
+  registerSessionResetter
+} from "@/session/auth-session.js";
 
 const props = defineProps({
   getEmailList: Function,
@@ -325,8 +330,7 @@ const firstLoad = ref(true)
 let scrollTop = 0
 const latestEmail = ref(null)
 const scrollbarRef = ref(null)
-let reqLock = false
-let listVersion = 0
+const requestCoordinator = createRequestCoordinator(getSessionGeneration)
 let prefetchedPage = null
 let prefetchingPage = null
 let isMobile = ref(innerWidth < 1367)
@@ -347,6 +351,7 @@ const position = ref(
 )
 const detailCache = new Map();
 const DETAIL_CACHE_LIMIT = 100;
+const unregisterSessionResetter = registerSessionResetter(resetEmailSessionState)
 
 const triggerRef = ref({
   getBoundingClientRect() {
@@ -398,6 +403,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  requestCoordinator.invalidate()
+  unregisterSessionResetter()
+  detailCache.clear()
   clearInterval(timer)
   clearTimeout(preloadTimer)
   window.removeEventListener('resize', handleResize)
@@ -889,19 +897,17 @@ function jumpDetails(email) {
 
 
 function getEmailList(refresh = false) {
-
-  if (reqLock) return;
+  const request = requestCoordinator.begin();
+  if (!request) return;
 
   let emailId = emailList.length > 0 ? emailList.at(-1).emailId : 0;
   const pageKey = getPageKey(emailId);
   const usePrefetch = !refresh && prefetchedPage?.key === pageKey;
 
-  reqLock = true
-
   if (!refresh) {
 
     if (loading.value || noLoading.value) {
-      reqLock = false
+      requestCoordinator.finish(request)
       return
     }
 
@@ -918,7 +924,6 @@ function getEmailList(refresh = false) {
     followLoading.value = !refresh;
   }
 
-  const requestVersion = listVersion;
   // 仅首屏/刷新(无游标)取 COUNT，翻页 withTotal=0 跳过总数统计
   const withTotal = emailId === 0 ? 1 : 0;
   const dataPromise = usePrefetch ? Promise.resolve(prefetchedPage.data) : props.getEmailList(emailId, queryParam.size, withTotal);
@@ -927,7 +932,7 @@ function getEmailList(refresh = false) {
   }
 
   dataPromise.then(async data => {
-    if (requestVersion !== listVersion) {
+    if (!requestCoordinator.isCurrent(request)) {
       return;
     }
 
@@ -956,9 +961,9 @@ function getEmailList(refresh = false) {
     if (withTotal) {
       total.value = data.total;
     }
-    prefetchNextPage(listVersion);
+    prefetchNextPage(request);
   }).catch(e => {
-    if (requestVersion !== listVersion) {
+    if (!requestCoordinator.isCurrent(request)) {
       return;
     }
     console.error('邮件列表加载失败', e);
@@ -968,7 +973,9 @@ function getEmailList(refresh = false) {
     loadError.value = true;
   }).finally(() => {
     loading.value = false
-    reqLock = false
+    if (requestCoordinator.finish(request)) {
+      getEmailList(true)
+    }
   })
 }
 
@@ -976,7 +983,7 @@ function getPageKey(emailId) {
   return [props.type, props.timeSort, emailId, queryParam.size].join(':');
 }
 
-function prefetchNextPage(version) {
+function prefetchNextPage(request) {
   if (noLoading.value || emailList.length === 0 || !props.getEmailList) {
     return;
   }
@@ -991,7 +998,7 @@ function prefetchNextPage(version) {
   prefetchingPage = key;
   props.getEmailList(nextEmailId, queryParam.size, 0)
       .then(data => {
-        if (version === listVersion) {
+        if (requestCoordinator.isCurrent(request)) {
           prefetchedPage = { key, data };
         }
       })
@@ -1038,10 +1045,29 @@ function refreshList() {
   checkAll.value = false;
   isIndeterminate.value = false;
   loadError.value = false;
-  listVersion++;
+  const canStartImmediately = requestCoordinator.invalidate({queueRefresh: true});
   prefetchedPage = null;
   prefetchingPage = null;
-  getEmailList(true);
+  if (canStartImmediately) {
+    getEmailList(true);
+  }
+}
+
+function resetEmailSessionState() {
+  requestCoordinator.invalidate()
+  prefetchedPage = null
+  prefetchingPage = null
+  detailCache.clear()
+  clearTimeout(preloadTimer)
+  emailList.length = 0
+  expandList.length = 0
+  latestEmail.value = null
+  total.value = 0
+  firstLoad.value = true
+  noLoading.value = false
+  loadError.value = false
+  loading.value = false
+  followLoading.value = false
 }
 
 function loadData() {

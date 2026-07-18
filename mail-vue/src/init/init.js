@@ -6,6 +6,12 @@ import {permsToRouter} from "@/perm/perm.js";
 import router from "@/router";
 import {websiteConfig} from "@/request/setting.js";
 import i18n, {detectLang, normalizeLang} from "@/i18n/index.js";
+import {
+    clearAuthSession,
+    installDynamicRoutes,
+    resetSessionState,
+    startAuthSession
+} from "@/session/auth-session.js";
 
 export async function init() {
     document.title = '\u200B'
@@ -26,6 +32,7 @@ export async function init() {
     let setting = null;
 
     if (token) {
+        startAuthSession(token);
         const userPromise = loginUserInfo().catch(e => {
             console.error(e);
             return null;
@@ -43,16 +50,15 @@ export async function init() {
             userStore.user = user;
 
             const routers = permsToRouter(user.permKeys);
-            routers.forEach(routerData => {
-                router.addRoute('layout', routerData);
-            });
+            installDynamicRoutes(router, routers);
         } else if (localStorage.getItem('token')) {
             // 非 401 失败(网络/服务端错误)时 token 仍在本地：
             // 清除登录态回到登录页，避免带着空用户信息进入主界面导致渲染崩溃
-            localStorage.removeItem('token');
+            await clearAuthSession({redirect: false});
         }
 
     } else {
+        resetSessionState();
         setting = await websiteConfig();
         settingStore.settings = setting;
         settingStore.domainList = setting.domainList;

@@ -8,9 +8,35 @@ import piniaPersistedState from 'pinia-plugin-persistedstate';
 import 'element-plus/theme-chalk/dark/css-vars.css';
 import 'nprogress/nprogress.css';
 import perm from "@/perm/perm.js";
+import {configureAuthSession, registerSessionResetter} from "@/session/auth-session.js";
+import {resetAuthenticatedStores} from "@/session/reset-authenticated-stores.js";
+import {useAccountStore} from "@/store/account.js";
+import {userDraftStore} from "@/store/draft.js";
+import {useEmailStore} from "@/store/email.js";
+import {useRoleStore} from "@/store/role.js";
+import {useSendStore} from "@/store/send.js";
+import {useUiStore} from "@/store/ui.js";
+import {useUserStore} from "@/store/user.js";
+import {useWriterStore} from "@/store/writer.js";
 const pinia = createPinia().use(piniaPersistedState)
 import i18n from "@/i18n/index.js";
 const app = createApp(App).use(pinia)
+
+configureAuthSession({
+    storage: localStorage,
+    navigateToLogin: () => router.replace({name: 'login'})
+})
+registerSessionResetter(() => resetAuthenticatedStores({
+    accountStore: useAccountStore(),
+    userStore: useUserStore(),
+    emailStore: useEmailStore(),
+    sendStore: useSendStore(),
+    roleStore: useRoleStore(),
+    draftStore: userDraftStore(),
+    writerStore: useWriterStore(),
+    uiStore: useUiStore()
+}))
+
 try {
     await init()
 } catch (e) {

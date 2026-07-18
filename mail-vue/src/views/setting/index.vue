@@ -64,12 +64,12 @@
 import {reactive, ref, defineOptions} from 'vue'
 import {resetPassword, userDelete} from "@/request/my.js";
 import {useUserStore} from "@/store/user.js";
-import router from "@/router/index.js";
 import {accountSetName} from "@/request/account.js";
 import {useAccountStore} from "@/store/account.js";
 import {useI18n} from "vue-i18n";
 import {useSettingStore} from "@/store/setting.js";
 import {SUPPORTED_LANGS} from "@/i18n/index.js";
+import {clearAuthSession} from "@/session/auth-session.js";
 
 const { t } = useI18n()
 const accountStore = useAccountStore()
@@ -146,9 +146,8 @@ const deleteConfirm = () => {
     cancelButtonText: t('cancel'),
     type: 'warning'
   }).then(() => {
-    userDelete().then(() => {
-      localStorage.removeItem('token');
-      router.replace('/login');
+    userDelete().then(async () => {
+      await clearAuthSession();
       ElMessage({
         message: t('delSuccessMsg'),
         type: 'success',

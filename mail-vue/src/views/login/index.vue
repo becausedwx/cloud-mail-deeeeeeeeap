@@ -169,6 +169,11 @@ import {
   exchangeLinuxDoCallback,
   prepareLinuxDoAuthorization
 } from "@/views/login/oauth-flow.js";
+import {
+  clearAuthSession,
+  installDynamicRoutes,
+  startAuthSession
+} from "@/session/auth-session.js";
 
 const {t} = useI18n();
 const accountStore = useAccountStore();
@@ -432,7 +437,7 @@ const submit = () => {
 }
 
 async function saveToken(token) {
-  localStorage.setItem('token', token)
+  startAuthSession(token)
   refreshWebsiteConfig()
   try {
     const user = await loginUserInfo();
@@ -440,13 +445,13 @@ async function saveToken(token) {
     accountStore.currentAccount = user.account;
     userStore.user = user;
     const routers = permsToRouter(user.permKeys);
-    routers.forEach(routerData => {
-      router.addRoute('layout', routerData);
-    });
+    installDynamicRoutes(router, routers);
     await router.replace({name: 'layout'})
   } catch (e) {
     // 用户信息拉取失败则不能保留登录态，否则后续进入主界面会因空用户信息崩溃
-    localStorage.removeItem('token')
+    if (localStorage.getItem('token')) {
+      await clearAuthSession({redirect: false})
+    }
     throw e
   } finally {
     oauthLoading.value = false;

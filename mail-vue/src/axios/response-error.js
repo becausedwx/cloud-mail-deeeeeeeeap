@@ -1,0 +1,25 @@
+function getApiPayload(error) {
+  const data = error?.response?.data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  return Number.isInteger(data.code) ? data : null
+}
+
+export function classifyHttpError(error) {
+  const status = Number(error?.response?.status ?? error?.status)
+  const payload = getApiPayload(error)
+
+  if (payload?.code === 401 || status === 401) {
+    return { kind: 'unauthorized', payload }
+  }
+  if (payload?.code === 403) {
+    return { kind: 'forbidden', payload }
+  }
+  if (status === 403) {
+    return { kind: 'edge-forbidden', payload: null }
+  }
+  return { kind: 'other', payload }
+}
+
+export function isCurrentSessionResponse(requestGeneration, currentGeneration) {
+  return requestGeneration === undefined || requestGeneration === currentGeneration
+}

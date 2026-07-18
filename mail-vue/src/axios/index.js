@@ -1,126 +1,92 @@
-import axios from "axios";
-import router from "@/router";
-import i18n from "@/i18n/index.js";
-import {useSettingStore} from "@/store/setting.js";
+import axios from 'axios'
+import i18n from '@/i18n/index.js'
+import { useSettingStore } from '@/store/setting.js'
+import { clearAuthSession, getSessionGeneration } from '@/session/auth-session.js'
+import { classifyHttpError, isCurrentSessionResponse } from '@/axios/response-error.js'
 
-let http = axios.create({
-    baseURL: import.meta.env.VITE_BASE_URL,
-    // 全局兜底超时，避免请求无限 pending；长耗时请求(发信/轮询)单独放宽
-    timeout: 30 * 1000
-});
-
-http.interceptors.request.use(config => {
-    const { lang } = useSettingStore();
-    config.headers.Authorization = `${localStorage.getItem('token')}`
-    config.headers['accept-language'] = lang
-    return config
+const http = axios.create({
+  baseURL: import.meta.env.VITE_BASE_URL,
+  timeout: 30 * 1000
 })
 
-http.interceptors.response.use((res) => {
+http.interceptors.request.use(config => {
+  const { lang } = useSettingStore()
+  config.headers.Authorization = `${localStorage.getItem('token')}`
+  config.headers['accept-language'] = lang
+  config.cloudMailSessionGeneration = getSessionGeneration()
+  return config
+})
 
-        return new Promise((resolve, reject) => {
+http.interceptors.response.use(async res => {
+  const data = res.data
+  if (data.code === 200) {
+    return data.data
+  }
 
-            const noMsg = res.config.noMsg;
-            const data = res.data
+  const currentResponse = isCurrentSessionResponse(
+    res.config.cloudMailSessionGeneration,
+    getSessionGeneration()
+  )
+  if (data.code === 401 && currentResponse) {
+    if (!res.config.noMsg) showApiMessage(data.message, 'error')
+    await clearAuthSession()
+  } else if (!res.config.noMsg) {
+    showApiMessage(data.message, data.code === 403 ? 'warning' : 'error')
+  }
+  return Promise.reject(data)
+}, async error => {
+  const classification = classifyHttpError(error)
+  const noMsg = error.config?.noMsg
+  const currentResponse = isCurrentSessionResponse(
+    error.config?.cloudMailSessionGeneration,
+    getSessionGeneration()
+  )
 
-            if (noMsg) {
+  if (classification.kind === 'unauthorized') {
+    if (currentResponse) {
+      if (!noMsg) showApiMessage(classification.payload?.message, 'error')
+      await clearAuthSession()
+    }
+    return Promise.reject(classification.payload || error)
+  }
 
-                data.code === 200 ? resolve(data.data) : reject(data)
+  if (classification.kind === 'forbidden') {
+    if (!noMsg) showApiMessage(classification.payload?.message, 'warning')
+    return Promise.reject(classification.payload)
+  }
 
-            } else if (data.code === 401) {
-                ElMessage({
-                    message: data.message,
-                    type: 'error',
-                    plain: true,
-                    grouping: true,
-                    repeatNum: -4,
-                })
-                localStorage.removeItem('token')
-                router.replace('/login')
-                reject(data)
-            } else if (data.code === 403) {
-                ElMessage({
-                    message: data.message,
-                    type: 'warning',
-                    plain: true,
-                    grouping: true,
-                    repeatNum: -4,
-                })
-                reject(data)
+  if (classification.kind === 'edge-forbidden') {
+    // Only a non-JSON edge/challenge response may trigger the one-shot reload path.
+    if (!sessionStorage.getItem('reloaded-on-403')) {
+      sessionStorage.setItem('reloaded-on-403', '1')
+      location.reload()
+    }
+    return Promise.reject(error)
+  }
 
-            } else if (data.code === 502) {
-                ElMessage({
-                    dangerouslyUseHTMLString: true,
-                    message: data.message,
-                    type: 'error',
-                    plain: true,
-                    grouping: true,
-                    repeatNum: -4,
-                })
-                reject(data)
-            } else if (data.code !== 200) {
-                ElMessage({
-                    message: data.message,
-                    type: 'error',
-                    plain: true,
-                    grouping: true,
-                    repeatNum: -4,
-                })
-                reject(data)
-            }
-            resolve(data.data)
-        })
-    },
-    (error) => {
+  if (noMsg) {
+    return Promise.reject(error)
+  }
+  if (error.message?.includes('Network Error')) {
+    showApiMessage(i18n.global.t('networkErrorMsg'), 'error')
+  } else if (error.code === 'ECONNABORTED') {
+    showApiMessage(i18n.global.t('timeoutErrorMsg'), 'error')
+  } else if (error.response) {
+    showApiMessage(i18n.global.t('serverBusyErrorMsg'), 'error')
+  } else {
+    showApiMessage(i18n.global.t('reqFailErrorMsg'), 'error')
+  }
+  return Promise.reject(error)
+})
 
-        if (error.status === 403) {
-            // 只自动刷新一次以触发可能的人机验证页，避免持续 403 时无限刷新
-            if (!sessionStorage.getItem('reloaded-on-403')) {
-                sessionStorage.setItem('reloaded-on-403', '1');
-                location.reload();
-                return;
-            }
-        }
-
-        const noMsg = error.config.noMsg;
-
-        if (noMsg) {
-            return Promise.reject(error)
-        } else if (error.message.includes('Network Error')) {
-            ElMessage({
-                message: i18n.global.t('networkErrorMsg'),
-                type: 'error',
-                plain: true,
-                grouping: true,
-                repeatNum: -4,
-            })
-        } else if (error.code === 'ECONNABORTED') {
-            ElMessage({
-                message: i18n.global.t('timeoutErrorMsg'),
-                type: 'error',
-                plain: true,
-                grouping: true
-            })
-        } else if (error.response) {
-            ElMessage({
-                message: i18n.global.t('serverBusyErrorMsg'),
-                type: 'error',
-                plain: true,
-                grouping: true,
-                repeatNum: -4,
-            })
-        } else {
-            ElMessage({
-                message: i18n.global.t('reqFailErrorMsg'),
-                type: 'error',
-                plain: true,
-                grouping: true,
-                repeatNum: -4,
-            })
-        }
-        return Promise.reject(error)
-    })
+function showApiMessage(message, type) {
+  ElMessage({
+    message: message || i18n.global.t('reqFailErrorMsg'),
+    type,
+    plain: true,
+    grouping: true,
+    repeatNum: -4
+  })
+}
 
 export default http
-
-

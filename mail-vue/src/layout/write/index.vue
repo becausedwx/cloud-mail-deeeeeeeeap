@@ -112,7 +112,6 @@ import {useWriterStore} from "@/store/writer.js";
 import db from "@/db/db.js";
 import dayjs from "dayjs";
 import {useI18n} from "vue-i18n";
-import router from "@/router/index.js";
 import {ElMessageBox} from "element-plus";
 import {getSendLimitViolation, SEND_LIMITS} from "@/layout/write/send-limits.js";
 
@@ -454,10 +453,6 @@ async function sendEmail() {
       message: h('span', {style: 'color: teal'}, e.message),
       position: 'bottom-right'
     })
-    if (e.code === 401) {
-      localStorage.removeItem('token');
-      router.replace('/login');
-    }
     show.value = true
     addRecipientRecord();
   }).finally(() => {
