@@ -5,8 +5,11 @@ import secretUtils from '../utils/secret-utils';
 import { EMAIL_SEARCH_BODY_LIMIT } from '../service/email-search-service';
 import BizError from '../error/biz-error';
 import cryptoUtils from '../utils/crypto-utils';
+import { readBoundedJson } from '../utils/request-body-utils';
+import { getBootstrapStatus } from './status';
 
 export const INIT_SECRET_HEADER = 'X-Cloud-Mail-Init-Secret';
+const ADMIN_BOOTSTRAP_JSON_MAX_BYTES = 32 * 1024;
 
 const dbInit = {
 	async init(c) {
@@ -17,33 +20,64 @@ const dbInit = {
 			return c.text('JWT secret mismatch', 401);
 		}
 
-		await this.intDB(c);
-		await this.v1_1DB(c);
-		await this.v1_2DB(c);
-		await this.v1_3DB(c);
-		await this.v1_3_1DB(c);
-		await this.v1_4DB(c);
-		await this.v1_5DB(c);
-		await this.v1_6DB(c);
-		await this.v1_7DB(c);
-		await this.v2DB(c);
-		await this.v2_3DB(c);
-		await this.v2_4DB(c);
-		await this.v2_5DB(c);
-		await this.v2_6DB(c);
-		await this.v2_7DB(c);
-		await this.v2_8DB(c);
-		await this.v2_9DB(c);
-		await this.v3_0DB(c);
-		await this.v3_1DB(c);
-		await this.v3_2DB(c);
-		await this.v3_3DB(c);
-		await this.v3_4DB(c);
-		await this.v3_5DB(c);
-		await this.v3_6DB(c);
-		await this.v3_7DB(c);
-		await settingService.refresh(c);
+		await this.runMigrationSteps([
+			['base-schema', () => this.intDB(c)],
+			['v1.1', () => this.v1_1DB(c)],
+			['v1.2', () => this.v1_2DB(c)],
+			['v1.3', () => this.v1_3DB(c)],
+			['v1.3.1', () => this.v1_3_1DB(c)],
+			['v1.4', () => this.v1_4DB(c)],
+			['v1.5', () => this.v1_5DB(c)],
+			['v1.6', () => this.v1_6DB(c)],
+			['v1.7', () => this.v1_7DB(c)],
+			['v2.0', () => this.v2DB(c)],
+			['v2.3', () => this.v2_3DB(c)],
+			['v2.4', () => this.v2_4DB(c)],
+			['v2.5', () => this.v2_5DB(c)],
+			['v2.6', () => this.v2_6DB(c)],
+			['v2.7', () => this.v2_7DB(c)],
+			['v2.8', () => this.v2_8DB(c)],
+			['v2.9', () => this.v2_9DB(c)],
+			['v3.0', () => this.v3_0DB(c)],
+			['v3.1', () => this.v3_1DB(c)],
+			['v3.2', () => this.v3_2DB(c)],
+			['v3.3', () => this.v3_3DB(c)],
+			['v3.4', () => this.v3_4DB(c)],
+			['v3.5', () => this.v3_5DB(c)],
+			['v3.6', () => this.v3_6DB(c)],
+			['v3.7', () => this.v3_7DB(c)],
+			['settings-cache', () => settingService.refresh(c)]
+		]);
+		await this.assertBootstrapReady(c, { requireAdmin: false });
 		return c.text('success');
+	},
+
+	async runMigrationSteps(steps) {
+		for (const [name, operation] of steps) {
+			try {
+				await operation();
+			} catch (error) {
+				console.error(`Database migration failed at ${name}`, error);
+				if (error?.name === 'BizError') {
+					throw new BizError(
+						`Database migration failed at ${name}: ${error.message}`,
+						error.code
+					);
+				}
+				throw new BizError(`Database migration failed at ${name}`, 500);
+			}
+		}
+	},
+
+	async assertBootstrapReady(c, { requireAdmin = true } = {}) {
+		const status = await getBootstrapStatus(c);
+		const ready = requireAdmin
+			? status.ready
+			: status.initialized && status.schemaReady;
+		if (!ready) {
+			throw new BizError('Database migration failed at bootstrap-health', 503);
+		}
+		return status;
 	},
 
 	async createAdmin(c, params) {
@@ -52,7 +86,14 @@ const dbInit = {
 			return c.text('JWT secret mismatch', 401);
 		}
 		if (params === undefined) {
-			params = await c.req.json();
+			params = await readBoundedJson(
+				c,
+				ADMIN_BOOTSTRAP_JSON_MAX_BYTES,
+				'administrator bootstrap JSON body exceeds 32 KiB'
+			);
+		}
+		if (!params || typeof params !== 'object' || Array.isArray(params)) {
+			throw new BizError('Invalid administrator bootstrap request', 400);
 		}
 
 		const password = params?.password;
@@ -544,69 +585,72 @@ const dbInit = {
 			try {
 				await c.env.db.prepare(query).run();
 			} catch (e) {
-				console.warn(`Skip migration SQL: ${e.message}`);
+				if (!isIdempotentMigrationError(e)) {
+					throw e;
+				}
+				console.warn(`Skip idempotent migration SQL: ${e.message}`);
 			}
 		}
 	},
 
 	async v2_9DB(c) {
-		try {
-			await c.env.db.prepare(`UPDATE setting SET auto_refresh = 5 WHERE auto_refresh = 1;`).run();
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
+		await c.env.db.prepare(`UPDATE setting SET auto_refresh = 5 WHERE auto_refresh = 1;`).run();
 	},
 
 	async v2_8DB(c) {
-		try {
-			await c.env.db.batch([
-				c.env.db.prepare(`ALTER TABLE account ADD COLUMN sort INTEGER NOT NULL DEFAULT 0;`)
-			]);
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE account ADD COLUMN sort INTEGER NOT NULL DEFAULT 0;`
+		]);
 	},
 
 	async v2_7DB(c) {
-		try {
-			await c.env.db.batch([
-				c.env.db.prepare(`ALTER TABLE setting RENAME COLUMN auto_refresh_time TO auto_refresh;`)
-			]);
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
+		const columns = await c.env.db.prepare(`PRAGMA table_info(setting)`).all();
+		const names = new Set((columns.results || []).map(row => row.name));
+		if (names.has('auto_refresh')) {
+			return;
 		}
+		if (!names.has('auto_refresh_time')) {
+			throw new Error('setting auto refresh column is missing');
+		}
+		await c.env.db.prepare(
+			`ALTER TABLE setting RENAME COLUMN auto_refresh_time TO auto_refresh;`
+		).run();
 	},
 
 	async v2_6DB(c) {
-		try {
-			await c.env.db.prepare(`ALTER TABLE account ADD COLUMN all_receive INTEGER NOT NULL DEFAULT 0;`).run();
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE account ADD COLUMN all_receive INTEGER NOT NULL DEFAULT 0;`
+		]);
 	},
 
 	async v2_5DB(c) {
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE setting ADD COLUMN email_prefix_filter text NOT NULL DEFAULT '';`
+		]);
 
-		try {
-			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN email_prefix_filter text NOT NULL DEFAULT '';`).run();
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
+		const emailColumns = await c.env.db.prepare('PRAGMA table_info(email)').all();
+		const emailColumnNames = new Set((emailColumns.results || []).map(row => row.name));
+		if (emailColumnNames.has('unread')) {
+			return;
 		}
 
 		try {
 			await c.env.db.batch([
-				c.env.db.prepare(`ALTER TABLE email ADD COLUMN unread INTEGER NOT NULL DEFAULT 0;`),
-				c.env.db.prepare(`UPDATE email SET unread = 1;`)
+				c.env.db.prepare(`
+					ALTER TABLE email ADD COLUMN unread INTEGER NOT NULL DEFAULT 0
+				`),
+				c.env.db.prepare('UPDATE email SET unread = 1;')
 			]);
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
+		} catch (error) {
+			if (!isIdempotentMigrationError(error)) {
+				throw error;
+			}
+			console.warn(`Skip idempotent migration SQL: ${error.message}`);
 		}
-
 	},
 
 	async v2_4DB(c) {
-		try {
-			await c.env.db.prepare(`
+		await c.env.db.prepare(`
 				CREATE TABLE IF NOT EXISTS oauth (
 					oauth_id INTEGER PRIMARY KEY AUTOINCREMENT,
 					oauth_user_id TEXT,
@@ -621,59 +665,38 @@ const dbInit = {
 					user_id INTEGER NOT NULL DEFAULT 0
 				)
 			`).run();
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
 
-		try {
-			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN min_email_prefix INTEGER NOT NULL DEFAULT 1;`).run();
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE setting ADD COLUMN min_email_prefix INTEGER NOT NULL DEFAULT 1;`
+		]);
 
 	},
 
 	async v2_3DB(c) {
-		try {
-			await c.env.db.batch([
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN force_path_style	INTEGER NOT NULL DEFAULT 1;`),
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN custom_domain TEXT NOT NULL DEFAULT '';`),
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN tg_msg_to TEXT NOT NULL DEFAULT 'show';`),
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN tg_msg_from TEXT NOT NULL DEFAULT 'only-name';`)
-			]);
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
-
-		try {
-			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN tg_msg_text TEXT NOT NULL DEFAULT 'show';`).run();
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
-
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE setting ADD COLUMN force_path_style INTEGER NOT NULL DEFAULT 1;`,
+			`ALTER TABLE setting ADD COLUMN custom_domain TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE setting ADD COLUMN tg_msg_to TEXT NOT NULL DEFAULT 'show';`,
+			`ALTER TABLE setting ADD COLUMN tg_msg_from TEXT NOT NULL DEFAULT 'only-name';`,
+			`ALTER TABLE setting ADD COLUMN tg_msg_text TEXT NOT NULL DEFAULT 'show';`
+		]);
 	},
 
 	async v2DB(c) {
-		try {
-			await c.env.db.batch([
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN bucket TEXT NOT NULL DEFAULT '';`),
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN region TEXT NOT NULL DEFAULT '';`),
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';`),
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN s3_access_key TEXT NOT NULL DEFAULT '';`),
-				c.env.db.prepare(`ALTER TABLE setting ADD COLUMN s3_secret_key TEXT NOT NULL DEFAULT '';`),
-				c.env.db.prepare(`DELETE FROM perm WHERE perm_key = 'setting:clean'`)
-			]);
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE setting ADD COLUMN bucket TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE setting ADD COLUMN region TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE setting ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE setting ADD COLUMN s3_access_key TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE setting ADD COLUMN s3_secret_key TEXT NOT NULL DEFAULT '';`,
+			`DELETE FROM perm WHERE perm_key = 'setting:clean'`
+		]);
 	},
 
 	async v1_7DB(c) {
-		try {
-			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN login_domain INTEGER NOT NULL DEFAULT 0;`).run();
-		} catch (e) {
-			console.warn(`跳过字段：${e.message}`);
-		}
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE setting ADD COLUMN login_domain INTEGER NOT NULL DEFAULT 0;`
+		]);
 	},
 
 	async v1_6DB(c) {
@@ -705,37 +728,23 @@ const dbInit = {
 			`CREATE INDEX IF NOT EXISTS idx_email_user_id_account_id ON email(user_id, account_id);`
 		];
 
-		const promises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
-			try {
-				await c.env.db.prepare(sql).run();
-			} catch (e) {
-				console.warn(`跳过字段：${e.message}`);
-			}
-		});
-
-		await Promise.all(promises);
+		await this.runOptionalSqlList(c, ADD_COLUMN_SQL_LIST);
 		await c.env.db.prepare(`UPDATE setting SET notice_content = ? WHERE notice_content = '';`).bind(noticeContent).run();
-		try {
-			await c.env.db.batch([
-				c.env.db.prepare(`DROP INDEX IF EXISTS idx_account_email`),
-				c.env.db.prepare(`DROP INDEX IF EXISTS idx_user_email`),
-				c.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_account_email_nocase ON account (email COLLATE NOCASE)`),
-				c.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_email_nocase ON user (email COLLATE NOCASE)`)
-			]);
-		} catch (e) {
-			console.warn(e.message)
-		}
+		await c.env.db.batch([
+			c.env.db.prepare(`DROP INDEX IF EXISTS idx_account_email`),
+			c.env.db.prepare(`DROP INDEX IF EXISTS idx_user_email`),
+			c.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_account_email_nocase ON account (email COLLATE NOCASE)`),
+			c.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_email_nocase ON user (email COLLATE NOCASE)`)
+		]);
 
 	},
 
 	async v1_5DB(c) {
 		await c.env.db.prepare(`UPDATE perm SET perm_key = 'all-email:query' WHERE perm_key = 'sys-email:query'`).run();
 		await c.env.db.prepare(`UPDATE perm SET perm_key = 'all-email:delete' WHERE perm_key = 'sys-email:delete'`).run();
-		try {
-			await c.env.db.prepare(`ALTER TABLE role ADD COLUMN avail_domain TEXT NOT NULL DEFAULT ''`).run();
-		} catch (e) {
-			console.warn(`跳过字段添加：${e.message}`);
-		}
+		await this.runOptionalSqlList(c, [
+			`ALTER TABLE role ADD COLUMN avail_domain TEXT NOT NULL DEFAULT ''`
+		]);
 	},
 
 	async v1_4DB(c) {
@@ -751,26 +760,23 @@ const dbInit = {
       )
     `).run();
 
-		// 添加不区分大小写的唯一索引
-		try {
-			await c.env.db.prepare(`
-				CREATE UNIQUE INDEX IF NOT EXISTS idx_setting_code ON reg_key(code COLLATE NOCASE)
-			`).run();
-		} catch (e) {
-			console.warn(`跳过创建索引：${e.message}`);
-		}
+		// 添加不区分大小写的唯一索引；重复业务数据必须显式失败，不能跳过。
+		await c.env.db.prepare(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_setting_code ON reg_key(code COLLATE NOCASE)
+		`).run();
 
-
-		try {
-			await c.env.db.prepare(`
+		await c.env.db.prepare(`
         INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES
         (33,'注册密钥', NULL, 0, 1, 5.1),
         (34,'密钥查看', 'reg-key:query', 33, 2, 0),
         (35,'密钥添加', 'reg-key:add', 33, 2, 1),
-        (36,'密钥删除', 'reg-key:delete', 33, 2, 2)`).run();
-		} catch (e) {
-			console.warn(`跳过数据：${e.message}`);
-		}
+        (36,'密钥删除', 'reg-key:delete', 33, 2, 2)
+		ON CONFLICT(perm_id) DO UPDATE SET
+			name = excluded.name,
+			perm_key = excluded.perm_key,
+			pid = excluded.pid,
+			type = excluded.type,
+			sort = excluded.sort`).run();
 
 		const ADD_COLUMN_SQL_LIST = [
 			`ALTER TABLE setting ADD COLUMN reg_key INTEGER NOT NULL DEFAULT 1;`,
@@ -779,15 +785,7 @@ const dbInit = {
 			`ALTER TABLE user ADD COLUMN reg_key_id INTEGER NOT NULL DEFAULT 0;`
 		];
 
-		const promises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
-			try {
-				await c.env.db.prepare(sql).run();
-			} catch (e) {
-				console.warn(`跳过字段添加：${e.message}`);
-			}
-		});
-
-		await Promise.all(promises);
+		await this.runOptionalSqlList(c, ADD_COLUMN_SQL_LIST);
 
 	},
 
@@ -807,15 +805,7 @@ const dbInit = {
 			`ALTER TABLE setting ADD COLUMN rule_type INTEGER NOT NULL DEFAULT 0;`
 		];
 
-		const promises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
-			try {
-				await c.env.db.prepare(sql).run();
-			} catch (e) {
-				console.warn(`跳过字段添加：${e.message}`);
-			}
-		});
-
-		await Promise.all(promises);
+		await this.runOptionalSqlList(c, ADD_COLUMN_SQL_LIST);
 
 		const nameColumn = await c.env.db.prepare(`SELECT * FROM pragma_table_info('email') WHERE name = 'to_email' limit 1`).first();
 
@@ -844,27 +834,21 @@ const dbInit = {
 			`ALTER TABLE email ADD COLUMN relation TEXT NOT NULL DEFAULT '';`
 		];
 
-		const promises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
-			try {
-				await c.env.db.prepare(sql).run();
-			} catch (e) {
-				console.warn(`跳过字段添加：${e.message}`);
-			}
-		});
-
-		await Promise.all(promises);
+		await this.runOptionalSqlList(c, ADD_COLUMN_SQL_LIST);
 
 		await this.receiveEmailToRecipient(c);
 		await this.initAccountName(c);
 
-		try {
-			await c.env.db.prepare(`
+		await c.env.db.prepare(`
         INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES
         (31,'分析页', NULL, 0, 1, 2.1),
-        (32,'数据查看', 'analysis:query', 31, 2, 1)`).run();
-		} catch (e) {
-			console.warn(`跳过数据：${e.message}`);
-		}
+        (32,'数据查看', 'analysis:query', 31, 2, 1)
+		ON CONFLICT(perm_id) DO UPDATE SET
+			name = excluded.name,
+			perm_key = excluded.perm_key,
+			pid = excluded.pid,
+			type = excluded.type,
+			sort = excluded.sort`).run();
 
 	},
 
@@ -896,15 +880,7 @@ const dbInit = {
 			`ALTER TABLE attachments ADD COLUMN type INTEGER NOT NULL DEFAULT 0;`
 		];
 
-		const promises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
-			try {
-				await c.env.db.prepare(sql).run();
-			} catch (e) {
-				console.warn(`跳过字段添加：${e.message}`);
-			}
-		});
-
-		await Promise.all(promises);
+		await this.runOptionalSqlList(c, ADD_COLUMN_SQL_LIST);
 
 		// 创建 perm 表并初始化
 		await c.env.db.prepare(`
@@ -1096,17 +1072,13 @@ const dbInit = {
 		  )
 		`).run();
 
-		try {
-			await c.env.db.prepare(`
+		await c.env.db.prepare(`
 			  INSERT INTO setting (
 				register, receive, add_email, many_email, title, auto_refresh, register_verify, add_email_verify
 			  )
 			  SELECT 0, 0, 0, 0, 'Cloud Mail', 0, 1, 1
 			  WHERE NOT EXISTS (SELECT 1 FROM setting)
 			`).run();
-		} catch (e) {
-			console.warn(e)
-		}
 
 	},
 
@@ -1159,3 +1131,7 @@ const dbInit = {
 	}
 };
 export { dbInit };
+
+function isIdempotentMigrationError(error) {
+	return /duplicate column name:/i.test(error?.message || '');
+}

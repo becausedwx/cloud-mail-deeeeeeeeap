@@ -6,6 +6,7 @@ import { star } from '../entity/star';
 import settingService from './setting-service';
 import accountService from './account-service';
 import BizError from '../error/biz-error';
+import { isConfiguredDomain } from '../utils/domain-utils';
 import emailUtils from '../utils/email-utils';
 import fileUtils from '../utils/file-utils';
 import { Resend } from 'resend';
@@ -387,10 +388,9 @@ const emailService = {
 		const roleRow = await roleService.selectById(c, userRow.type);
 
 		//判断接收方是不是全部为站内邮箱
-		const allInternal = receiveEmail.every(email => {
-			const domain = '@' + emailUtils.getDomain(email);
-			return domainList.includes(domain);
-		});
+		const allInternal = receiveEmail.every(email => (
+			isConfiguredDomain(domainList, emailUtils.getDomain(email))
+		));
 
 		if (!emailUtils.isSameAddress(userRow.email, c.env.admin)) {
 

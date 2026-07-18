@@ -19,6 +19,7 @@ import accountService from './account-service';
 import emailService from './email-service';
 import { normalizeSendRequest } from '../utils/send-request-utils';
 import authRateLimitService from './auth-rate-limit-service';
+import { isConfiguredDomain } from '../utils/domain-utils';
 
 const PUBLIC_PREVIEW_TEXT_LENGTH = 240;
 const PUBLIC_SEND_HOURLY_LIMIT = 100;
@@ -212,7 +213,7 @@ const publicService = {
 				throw new BizError('Administrator account must be created through the initialization flow', 403);
 			}
 
-			if (!c.env.domain.includes(emailUtils.getDomain(emailRow.email))) {
+			if (!isConfiguredDomain(c.env.domain, emailUtils.getDomain(emailRow.email))) {
 				throw new BizError(t('notEmailDomain'));
 			}
 

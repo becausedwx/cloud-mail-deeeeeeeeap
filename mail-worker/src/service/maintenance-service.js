@@ -399,23 +399,29 @@ const maintenanceService = {
 		}
 
 		if (action === 'schema') {
-			await dbInit.v3_0DB(c);
-			await dbInit.v3_1DB(c);
-			await dbInit.v3_2DB(c);
-			await dbInit.v3_3DB(c);
-			await dbInit.v3_4DB(c);
-			await dbInit.v3_5DB(c);
-			await dbInit.v3_6DB(c);
-			await dbInit.v3_7DB(c);
+			await dbInit.runMigrationSteps([
+				['maintenance-v3.0', () => dbInit.v3_0DB(c)],
+				['maintenance-v3.1', () => dbInit.v3_1DB(c)],
+				['maintenance-v3.2', () => dbInit.v3_2DB(c)],
+				['maintenance-v3.3', () => dbInit.v3_3DB(c)],
+				['maintenance-v3.4', () => dbInit.v3_4DB(c)],
+				['maintenance-v3.5', () => dbInit.v3_5DB(c)],
+				['maintenance-v3.6', () => dbInit.v3_6DB(c)],
+				['maintenance-v3.7', () => dbInit.v3_7DB(c)]
+			]);
+			await dbInit.assertBootstrapReady(c);
 			return this.health(c);
 		}
 
 		if (action === 'indexes') {
-			await dbInit.v3_4DB(c);
-			await dbInit.v3_5DB(c);
-			await dbInit.v3_6DB(c);
-			await dbInit.v3_7DB(c);
-			await dbInit.runOptionalSqlList(c, INDEX_SQL_LIST);
+			await dbInit.runMigrationSteps([
+				['maintenance-v3.4', () => dbInit.v3_4DB(c)],
+				['maintenance-v3.5', () => dbInit.v3_5DB(c)],
+				['maintenance-v3.6', () => dbInit.v3_6DB(c)],
+				['maintenance-v3.7', () => dbInit.v3_7DB(c)],
+				['maintenance-indexes', () => dbInit.runOptionalSqlList(c, INDEX_SQL_LIST)]
+			]);
+			await dbInit.assertBootstrapReady(c);
 			return this.health(c);
 		}
 

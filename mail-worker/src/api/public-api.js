@@ -5,6 +5,8 @@ import { readBoundedSendJson } from '../utils/send-request-utils';
 import { readBoundedJson } from '../utils/request-body-utils';
 
 const AUTH_JSON_MAX_BYTES = 32 * 1024;
+const PUBLIC_QUERY_JSON_MAX_BYTES = 64 * 1024;
+const PUBLIC_IMPORT_JSON_MAX_BYTES = 512 * 1024;
 
 app.post('/public/genToken', async (c) => {
 	const data = await publicService.genToken(c, await readBoundedJson(
@@ -16,12 +18,20 @@ app.post('/public/genToken', async (c) => {
 });
 
 app.post('/public/emailList', async (c) => {
-	const list = await publicService.emailList(c, await c.req.json());
+	const list = await publicService.emailList(c, await readBoundedJson(
+		c,
+		PUBLIC_QUERY_JSON_MAX_BYTES,
+		'public query JSON body exceeds 64 KiB'
+	));
 	return c.json(result.ok(list));
 });
 
 app.post('/public/addUser', async (c) => {
-	await publicService.addUser(c, await c.req.json());
+	await publicService.addUser(c, await readBoundedJson(
+		c,
+		PUBLIC_IMPORT_JSON_MAX_BYTES,
+		'public import JSON body exceeds 512 KiB'
+	));
 	return c.json(result.ok());
 });
 

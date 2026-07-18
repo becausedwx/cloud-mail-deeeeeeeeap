@@ -10,7 +10,11 @@ vi.mock('../src/init/init', () => ({
 		v3_5DB: vi.fn(),
 		v3_6DB: vi.fn(),
 		v3_7DB: vi.fn(),
-		runOptionalSqlList: vi.fn()
+		runOptionalSqlList: vi.fn(),
+		runMigrationSteps: vi.fn(async steps => {
+			for (const [, operation] of steps) await operation();
+		}),
+		assertBootstrapReady: vi.fn(async () => ({ ready: true }))
 	}
 }));
 
@@ -347,6 +351,7 @@ describe('maintenance service', () => {
 		await maintenanceService.repair(c, 'schema');
 
 		expect(dbInit.v3_7DB).toHaveBeenCalledWith(c);
+		expect(dbInit.assertBootstrapReady).toHaveBeenCalledWith(c);
 	});
 
 	it('rebuilds search table in cursor batches without loading every id at once', async () => {

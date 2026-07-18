@@ -89,6 +89,29 @@ describe('setting service', () => {
 		expect(result.domainList).toEqual(['@589497.xyz']);
 	});
 
+	it('normalizes configured domain arrays before exposing them to the frontend', async () => {
+		const { default: settingService } = await import('../src/service/setting-service');
+		const c = {
+			env: {
+				domain: [' Example.COM ', '@Mail.Example'],
+				kv: {
+					get: vi.fn(async () => ({
+						title: 'Cloud Mail',
+						resendTokens: '{}',
+						emailPrefixFilter: '',
+						loginDomain: 0
+					}))
+				}
+			},
+			get: vi.fn(() => null),
+			set: vi.fn()
+		};
+
+		const result = await settingService.query(c);
+
+		expect(result.domainList).toEqual(['@example.com', '@mail.example']);
+	});
+
 	it('falls back to D1 when the KV settings cache is malformed', async () => {
 		const { default: settingService } = await import('../src/service/setting-service');
 		const put = vi.fn(async () => {});

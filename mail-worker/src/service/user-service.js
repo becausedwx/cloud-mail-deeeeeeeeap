@@ -1,4 +1,5 @@
 import BizError from '../error/biz-error';
+import { isConfiguredDomain } from '../utils/domain-utils';
 import accountService from './account-service';
 import orm from '../entity/orm';
 import user from '../entity/user';
@@ -371,7 +372,7 @@ const userService = {
 			throw new BizError('Administrator account must be created through the initialization flow', 403);
 		}
 
-		if (!c.env.domain.includes(emailUtils.getDomain(email))) {
+		if (!isConfiguredDomain(c.env.domain, emailUtils.getDomain(email))) {
 			throw new BizError(t('notEmailDomain'));
 		}
 

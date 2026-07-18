@@ -2,9 +2,16 @@ import app from '../hono/hono';
 import result from '../model/result';
 import regKeyService from '../service/reg-key-service';
 import userContext from '../security/user-context';
+import { readBoundedJson } from '../utils/request-body-utils';
+
+const REG_KEY_JSON_MAX_BYTES = 64 * 1024;
 
 app.post('/regKey/add', async (c) => {
-	await regKeyService.add(c, await c.req.json(), await userContext.getUserId(c));
+	await regKeyService.add(c, await readBoundedJson(
+		c,
+		REG_KEY_JSON_MAX_BYTES,
+		'registration key JSON body exceeds 64 KiB'
+	), await userContext.getUserId(c));
 	return c.json(result.ok());
 })
 

@@ -52,6 +52,7 @@ describe('first deployment bootstrap', () => {
 
 		const maintenanceResponse = await SELF.fetch('http://example.com/api/maintenance/health');
 		const maintenanceBefore = await maintenanceResponse.json();
+		expect(maintenanceResponse.status).toBe(401);
 		expect(maintenanceBefore.code).toBe(401);
 
 		const initResponse = await SELF.fetch('http://example.com/api/init', {

@@ -3,8 +3,15 @@ import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:
 import worker from '../src';
 import { dbInit } from '../src/init/init';
 import resendService from '../src/service/resend-service';
+import KvConst from '../src/const/kv-const';
+import app from '../src/hono/hono';
+import BizError from '../src/error/biz-error';
 
 const encoder = new TextEncoder();
+
+app.get('/login/test-unknown-error', () => {
+	throw new Error('sensitive internal failure details');
+});
 
 describe('security hardening', () => {
 	it('blocks cross-origin API requests by default', async () => {
@@ -54,6 +61,27 @@ describe('security hardening', () => {
 		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://allowed.example');
 	});
 
+	it('adds CSP and browser security headers without allowing inline scripts', async () => {
+		const request = new Request('http://example.com/api/init/status');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, {}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		const csp = response.headers.get('Content-Security-Policy');
+		const directives = Object.fromEntries(csp.split(';').map(part => {
+			const [name, ...values] = part.trim().split(/\s+/);
+			return [name, values];
+		}));
+
+		expect(directives['script-src']).toContain("'self'");
+		expect(directives['script-src']).toContain('https://challenges.cloudflare.com');
+		expect(directives['script-src']).not.toContain("'unsafe-inline'");
+		expect(directives['style-src']).toContain("'unsafe-inline'");
+		expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+		expect(response.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+		expect(response.headers.get('Permissions-Policy')).toContain('camera=()');
+	});
+
 	it('rejects unsigned webhook requests at the public API boundary by default', async () => {
 		const request = new Request('http://example.com/api/webhooks', {
 			method: 'POST',
@@ -88,6 +116,49 @@ describe('security hardening', () => {
 		expect(await response.text()).toContain('Resend webhook body exceeds 256 KiB');
 	});
 
+	it('rejects oversized public import JSON before the service runs', async () => {
+		const request = new Request('http://example.com/api/public/addUser', {
+			method: 'POST',
+			headers: {
+				Authorization: 'public-test-token',
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({ padding: 'x'.repeat(512 * 1024) })
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, {
+			...env,
+			kv: {
+				async get(key) {
+					return key === KvConst.PUBLIC_KEY ? 'public-test-token' : null;
+				}
+			}
+		}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(413);
+		expect(await response.json()).toMatchObject({ code: 413 });
+	});
+
+	it('rejects oversized administrator bootstrap JSON before database access', async () => {
+		const request = new Request('http://example.com/api/init/admin', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Cloud-Mail-Init-Secret': 'test-init-secret'
+			},
+			body: JSON.stringify({ password: 'x'.repeat(32 * 1024) })
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, {
+			jwt_secret: 'test-init-secret'
+		}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(413);
+		expect(await response.json()).toMatchObject({ code: 413 });
+	});
+
 	it('keeps optional migrations idempotent', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const calls = [];
@@ -98,8 +169,8 @@ describe('security hardening', () => {
 						calls.push(sql);
 						return {
 							async run() {
-								if (sql.includes('duplicate')) {
-									throw new Error('duplicate column name');
+								if (sql.includes('ADD COLUMN duplicate')) {
+									throw new Error('duplicate column name: duplicate');
 								}
 							}
 						};
@@ -108,11 +179,95 @@ describe('security hardening', () => {
 			}
 		};
 
-		await dbInit.runOptionalSqlList(c, ['ALTER TABLE test ADD COLUMN ok TEXT', 'duplicate']);
+		await dbInit.runOptionalSqlList(c, [
+			'ALTER TABLE test ADD COLUMN ok TEXT',
+			'ALTER TABLE test ADD COLUMN duplicate TEXT'
+		]);
 
 		expect(calls).toHaveLength(2);
 		expect(warn).toHaveBeenCalled();
 		warn.mockRestore();
+	});
+
+	it('does not swallow non-idempotent migration failures', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const c = {
+			env: {
+				db: {
+					prepare() {
+						return {
+							async run() {
+								throw new Error('database unavailable');
+							}
+						};
+					}
+				}
+			}
+		};
+
+		await expect(dbInit.runOptionalSqlList(c, [
+			'ALTER TABLE test ADD COLUMN value TEXT'
+		])).rejects.toThrow('database unavailable');
+		warn.mockRestore();
+	});
+
+	it('preserves explicit migration conflict status and context', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		await expect(dbInit.runMigrationSteps([
+			['v3.4', async () => {
+				throw new BizError('Duplicate OAuth identities require manual review', 409);
+			}]
+		])).rejects.toMatchObject({
+			code: 409,
+			message: 'Database migration failed at v3.4: Duplicate OAuth identities require manual review'
+		});
+		error.mockRestore();
+	});
+
+	it('returns a safe HTTP 500 response for unknown failures', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const request = new Request('http://example.com/api/login/test-unknown-error');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({
+			code: 500,
+			message: 'Internal Server Error'
+		});
+		expect(error).toHaveBeenCalled();
+		error.mockRestore();
+	});
+
+	it('reports a safe migration step when database initialization fails', async () => {
+		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const request = new Request('http://example.com/api/init', {
+			method: 'POST',
+			headers: { 'X-Cloud-Mail-Init-Secret': 'test-init-secret' }
+		});
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, {
+			jwt_secret: 'test-init-secret',
+			db: {
+				prepare() {
+					return {
+						async run() {
+							throw new Error('sensitive migration failure details');
+						}
+					};
+				}
+			}
+		}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({
+			code: 500,
+			message: 'Database migration failed at base-schema'
+		});
+		expect(error).toHaveBeenCalled();
+		error.mockRestore();
 	});
 
 	it('rejects unsigned Resend webhooks when no secret is configured by default', async () => {

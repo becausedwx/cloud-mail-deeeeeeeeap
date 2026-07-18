@@ -10,6 +10,7 @@ import r2Service from './service/r2-service';
 import maintenanceService from './service/maintenance-service';
 import authRateLimitService from './service/auth-rate-limit-service';
 import deliveryAttemptService from './service/delivery-attempt-service';
+import { withSecurityHeaders } from './security/response-security';
 
 async function objectResponse(c, key) {
 	const obj = await r2Service.getObj(c, key);
@@ -29,29 +30,34 @@ function isEnabled(value) {
 }
 
 export default {
-	 async fetch(req, env, ctx) {
+	async fetch(req, env, ctx) {
 
 		const url = new URL(req.url)
+		let response;
 
 		if (url.pathname.startsWith('/api/')) {
 			url.pathname = url.pathname.replace('/api', '')
 			req = new Request(url.toString(), req)
-			return app.fetch(req, env, ctx);
+			response = await app.fetch(req, env, ctx);
+			return withSecurityHeaders(response);
 		}
 
-		 if (url.pathname.startsWith('/attachments/')) {
-			 const key = url.pathname.substring(1);
-			 if (!await attService.isPublicInlineKey({ env }, key)) {
-				 return new Response('Not found', { status: 404 });
-			 }
-			 return await objectResponse({ env }, key);
-		 }
+		if (url.pathname.startsWith('/attachments/')) {
+			const key = url.pathname.substring(1);
+			if (!await attService.isPublicInlineKey({ env }, key)) {
+				return withSecurityHeaders(new Response('Not found', { status: 404 }));
+			}
+			response = await objectResponse({ env }, key);
+			return withSecurityHeaders(response);
+		}
 
-		 if (url.pathname.startsWith('/static/')) {
-			 return await objectResponse({ env }, url.pathname.substring(1));
-		 }
+		if (url.pathname.startsWith('/static/')) {
+			response = await objectResponse({ env }, url.pathname.substring(1));
+			return withSecurityHeaders(response);
+		}
 
-		return env.assets.fetch(req);
+		response = await env.assets.fetch(req);
+		return withSecurityHeaders(response);
 	},
 	email: email,
 	async scheduled(c, env, ctx) {

@@ -10,6 +10,7 @@ import {t} from '../i18n/i18n'
 import verifyRecordService from './verify-record-service';
 import userContext from '../security/user-context';
 import { createBootstrapWebsiteConfig, getBootstrapStatus } from '../init/status';
+import { parseConfiguredDomains } from '../utils/domain-utils';
 
 const SETTING_CACHE_TTL = 30 * 1000;
 let settingCache = null;
@@ -93,21 +94,14 @@ const settingService = {
 			throw new BizError('数据库未初始化 Database not initialized.');
 		}
 
-		let domainList = c.env.domain;
-
-		if (typeof domainList === 'string') {
-			try {
-				domainList = JSON.parse(domainList)
-			} catch (error) {
-				throw new BizError(t('notJsonDomain'));
-			}
-		}
-
 		if (!c.env.domain) {
 			throw new BizError(t('noDomainVariable'));
 		}
 
-		if (!Array.isArray(domainList)) {
+		let domainList;
+		try {
+			domainList = parseConfiguredDomains(c.env.domain);
+		} catch {
 			throw new BizError(t('notJsonDomain'));
 		}
 
