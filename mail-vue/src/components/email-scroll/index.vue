@@ -268,6 +268,7 @@ import {
 import {createEmailDetailView} from "@/components/email-scroll/email-detail-view.js";
 import {createPagePrefetchController} from "@/components/email-scroll/page-prefetch.js";
 import {createActiveRuntime} from "@/components/email-scroll/active-runtime.js";
+import {createEmailListScrollbarWatchSource} from "@/components/email-scroll/email-list-scrollbar-source.js";
 
 const props = defineProps({
   getEmailList: Function,
@@ -455,7 +456,7 @@ const itemHeight = computed(() => {
     }
 })
 
-watch(emailList, () => {
+watch(createEmailListScrollbarWatchSource(emailList), () => {
   updateHasScrollbar();
 })
 

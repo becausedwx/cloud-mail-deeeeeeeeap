@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import { toUtc } from '../utils/date-uitil';
 
 const ANALYSIS_REFRESH_CONCURRENCY = 3;
+const ANALYSIS_NUMBER_COUNT_TTL_SECONDS = 35 * 60;
 
 const analysisService = {
 
@@ -38,7 +39,10 @@ const analysisService = {
 			return;
 		}
 
-		const numberCount = await this.refreshNumberCountCache(c);
+		const [numberCount, nameRatio] = await Promise.all([
+			this.refreshNumberCountCache(c),
+			this.nameRatio(c)
+		]);
 		let cursor;
 
 		do {
@@ -47,7 +51,7 @@ const analysisService = {
 
 			await this.mapLimit(keys, ANALYSIS_REFRESH_CONCURRENCY, async key => {
 				try {
-					await this.refreshEchartsCacheByKey(c, key.name, { numberCount });
+					await this.refreshEchartsCacheByKey(c, key.name, { numberCount, nameRatio });
 				} catch (e) {
 					console.error(`Refresh analysis cache failed for ${key.name}:`, e?.message || e);
 				}
@@ -86,13 +90,7 @@ const analysisService = {
 		] = await Promise.all([
 			options.numberCount ?? this.numberCount(c),
 
-			orm(c)
-				.select({ name: email.name, total: count() })
-				.from(email)
-				.where(and(eq(email.type, emailConst.type.RECEIVE), isNotNull(email.name),ne(email.name,'noreply'), ne(email.name,'')))
-				.groupBy(email.name)
-				.orderBy(desc(count()))
-				.limit(6),
+			options.nameRatio ?? this.nameRatio(c),
 
 
 			analysisDao.userDayCount(c, diffHours),
@@ -123,6 +121,16 @@ const analysisService = {
 		};
 	},
 
+	async nameRatio(c) {
+		return orm(c)
+			.select({ name: email.name, total: count() })
+			.from(email)
+			.where(and(eq(email.type, emailConst.type.RECEIVE), isNotNull(email.name), ne(email.name, 'noreply'), ne(email.name, '')))
+			.groupBy(email.name)
+			.orderBy(desc(count()))
+			.limit(6);
+	},
+
 	async numberCount(c) {
 		if (!this.analysisCacheEnabled(c)) {
 			return analysisDao.numberCount(c);
@@ -134,7 +142,7 @@ const analysisService = {
 		}
 
 		const data = await analysisDao.numberCount(c);
-		await c.env.kv.put(kvConst.ANALYSIS_NUMBER_COUNT, JSON.stringify(data), { expirationTtl: 60 });
+		await c.env.kv.put(kvConst.ANALYSIS_NUMBER_COUNT, JSON.stringify(data), { expirationTtl: ANALYSIS_NUMBER_COUNT_TTL_SECONDS });
 		return data;
 	},
 
@@ -142,7 +150,7 @@ const analysisService = {
 		const data = await analysisDao.numberCount(c);
 
 		if (this.analysisCacheEnabled(c)) {
-			await c.env.kv.put(kvConst.ANALYSIS_NUMBER_COUNT, JSON.stringify(data), { expirationTtl: 60 });
+			await c.env.kv.put(kvConst.ANALYSIS_NUMBER_COUNT, JSON.stringify(data), { expirationTtl: ANALYSIS_NUMBER_COUNT_TTL_SECONDS });
 		}
 
 		return data;
