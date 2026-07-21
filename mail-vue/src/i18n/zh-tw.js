@@ -80,6 +80,7 @@ const zhTw = {
     deleteUser: '刪除帳戶',
     deleteUserBtn: '刪除帳戶',
     changePassword: '修改密碼',
+    currentPassword: '目前密碼',
     newPassword: '新的密碼',
     confirmPassword: '確認密碼',
     add: '新增',

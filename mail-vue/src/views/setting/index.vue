@@ -53,8 +53,9 @@
     </div>
     <el-dialog v-model="pwdShow" :title="$t('changePassword')" width="340">
       <div class="update-pwd">
-        <el-input type="password" :placeholder="$t('newPassword')" v-model="form.password" autocomplete="off"/>
-        <el-input type="password" :placeholder="$t('confirmPassword')" v-model="form.newPwd" autocomplete="off"/>
+        <el-input type="password" :placeholder="$t('currentPassword')" v-model="form.currentPassword" autocomplete="current-password"/>
+        <el-input type="password" :placeholder="$t('newPassword')" v-model="form.newPassword" autocomplete="new-password"/>
+        <el-input type="password" :placeholder="$t('confirmPassword')" v-model="form.confirmPassword" autocomplete="new-password"/>
         <el-button type="primary" :loading="setPwdLoading" @click="submitPwd">{{$t('save')}}</el-button>
       </div>
     </el-dialog>
@@ -70,6 +71,7 @@ import {useI18n} from "vue-i18n";
 import {useSettingStore} from "@/store/setting.js";
 import {SUPPORTED_LANGS} from "@/i18n/index.js";
 import {clearAuthSession} from "@/session/auth-session.js";
+import {changePasswordAndSignOut} from "@/views/setting/password-change.js";
 
 const { t } = useI18n()
 const accountStore = useAccountStore()
@@ -136,8 +138,9 @@ function changeLang(lang) {
 
 const pwdShow = ref(false)
 const form = reactive({
-  password: '',
-  newPwd: '',
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: '',
 })
 
 const deleteConfirm = () => {
@@ -160,7 +163,7 @@ const deleteConfirm = () => {
 
 function submitPwd() {
 
-  if (!form.password) {
+  if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
     ElMessage({
       message: t('emptyPwdMsg'),
       type: 'error',
@@ -169,7 +172,7 @@ function submitPwd() {
     return
   }
 
-  if (form.password.length < 6) {
+  if (form.newPassword.length < 6) {
     ElMessage({
       message: t('pwdLengthMsg'),
       type: 'error',
@@ -178,7 +181,7 @@ function submitPwd() {
     return
   }
 
-  if (form.password !== form.newPwd) {
+  if (form.newPassword !== form.confirmPassword) {
     ElMessage({
       message: t('confirmPwdFailMsg'),
       type: 'error',
@@ -188,7 +191,12 @@ function submitPwd() {
   }
 
   setPwdLoading.value = true
-  resetPassword(form.password).then(() => {
+  changePasswordAndSignOut({
+    currentPassword: form.currentPassword,
+    newPassword: form.newPassword,
+    updatePassword: resetPassword,
+    clearSession: clearAuthSession
+  }).then(() => {
     ElMessage({
       message: t('saveSuccessMsg'),
       type: 'success',
@@ -196,8 +204,9 @@ function submitPwd() {
     })
     pwdShow.value = false
     setPwdLoading.value = false
-    form.password = ''
-    form.newPwd = ''
+    form.currentPassword = ''
+    form.newPassword = ''
+    form.confirmPassword = ''
   }).catch(() => {
     setPwdLoading.value = false
   })

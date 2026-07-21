@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { settingConst } from '../src/const/entity-const';
+import { emailConst, isDel, settingConst, userConst } from '../src/const/entity-const';
 
 const mocks = vi.hoisted(() => ({
 	parse: vi.fn(),
 	querySetting: vi.fn(),
 	selectAccount: vi.fn(),
+	selectUser: vi.fn(),
+	selectRoleByUser: vi.fn(),
+	hasAvailDomainPerm: vi.fn(),
+	isBanEmail: vi.fn(),
 	receive: vi.fn(),
 	completeReceive: vi.fn(),
 	failReceive: vi.fn(),
@@ -28,6 +32,18 @@ vi.mock('../src/service/setting-service', () => ({
 
 vi.mock('../src/service/account-service', () => ({
 	default: { selectByEmailIncludeDel: mocks.selectAccount }
+}));
+
+vi.mock('../src/service/user-service', () => ({
+	default: { selectByIdIncludeDel: mocks.selectUser }
+}));
+
+vi.mock('../src/service/role-service', () => ({
+	default: {
+		selectByUserId: mocks.selectRoleByUser,
+		hasAvailDomainPerm: mocks.hasAvailDomainPerm,
+		isBanEmail: mocks.isBanEmail
+	}
 }));
 
 vi.mock('../src/service/email-service', () => ({
@@ -106,6 +122,15 @@ describe('incoming email handler', () => {
 		mocks.parse.mockResolvedValue(parsedEmail());
 		mocks.querySetting.mockResolvedValue(settings());
 		mocks.selectAccount.mockResolvedValue(null);
+		mocks.selectUser.mockResolvedValue({
+			userId: 7,
+			email: 'inbox@example.com',
+			status: 0,
+			isDel: isDel.NORMAL
+		});
+		mocks.selectRoleByUser.mockResolvedValue({ banEmail: '', availDomain: '' });
+		mocks.hasAvailDomainPerm.mockReturnValue(true);
+		mocks.isBanEmail.mockReturnValue(false);
 		mocks.receive.mockResolvedValue({ emailId: 1, userId: 0, accountId: 0 });
 		mocks.completeReceive.mockResolvedValue({ emailId: 1 });
 		mocks.failReceive.mockResolvedValue();
@@ -114,6 +139,164 @@ describe('incoming email handler', () => {
 		mocks.shouldExtractCode.mockReturnValue(false);
 		mocks.getBuffHash.mockResolvedValue('hash');
 		mocks.getExtFileName.mockReturnValue('.pdf');
+	});
+
+	it('treats a soft-deleted mailbox as missing when no-recipient mail is disabled', async () => {
+		mocks.querySetting.mockResolvedValue(settings({
+			noRecipient: settingConst.noRecipient.CLOSE
+		}));
+		mocks.selectAccount.mockResolvedValue({
+			accountId: 21,
+			userId: 7,
+			email: 'inbox@example.com',
+			isDel: isDel.DELETE
+		});
+		const incoming = message();
+
+		await handleEmail(incoming, {}, {});
+
+		expect(incoming.setReject).toHaveBeenCalledWith('Recipient not found');
+		expect(mocks.selectUser).not.toHaveBeenCalled();
+		expect(mocks.receive).not.toHaveBeenCalled();
+	});
+
+	it('delivers to an active mailbox owner', async () => {
+		mocks.querySetting.mockResolvedValue(settings({
+			noRecipient: settingConst.noRecipient.CLOSE
+		}));
+		mocks.selectAccount.mockResolvedValue({
+			accountId: 21,
+			userId: 7,
+			email: 'inbox@example.com',
+			isDel: isDel.NORMAL
+		});
+		mocks.receive.mockResolvedValue({ emailId: 1, userId: 7, accountId: 21 });
+
+		await handleEmail(message(), {}, {});
+
+		expect(mocks.receive).toHaveBeenCalledWith(
+			{ env: {} },
+			expect.objectContaining({ userId: 7, accountId: 21 }),
+			expect.any(Array),
+			undefined
+		);
+		expect(mocks.completeReceive).toHaveBeenCalledWith(
+			{ env: {} },
+			emailConst.status.RECEIVE,
+			1
+		);
+	});
+
+	it('stores a soft-deleted mailbox as unowned when no-recipient mail is enabled', async () => {
+		mocks.querySetting.mockResolvedValue(settings({
+			noRecipient: settingConst.noRecipient.OPEN
+		}));
+		mocks.selectAccount.mockResolvedValue({
+			accountId: 21,
+			userId: 7,
+			email: 'inbox@example.com',
+			isDel: isDel.DELETE
+		});
+
+		await handleEmail(message(), {}, {});
+
+		expect(mocks.selectUser).not.toHaveBeenCalled();
+		expect(mocks.receive).toHaveBeenCalledWith(
+			{ env: {} },
+			expect.objectContaining({ userId: 0, accountId: 0 }),
+			expect.any(Array),
+			undefined
+		);
+		expect(mocks.completeReceive).toHaveBeenCalledWith(
+			{ env: {} },
+			emailConst.status.NOONE,
+			1
+		);
+	});
+
+	it.each([
+		['missing', null],
+		['soft-deleted', {
+			userId: 7,
+			email: 'inbox@example.com',
+			status: userConst.status.NORMAL,
+			isDel: isDel.DELETE
+		}],
+		['disabled', {
+			userId: 7,
+			email: 'inbox@example.com',
+			status: userConst.status.BAN,
+			isDel: isDel.NORMAL
+		}]
+	])('does not assign mail to a %s mailbox owner', async (_kind, userRow) => {
+		mocks.selectAccount.mockResolvedValue({
+			accountId: 21,
+			userId: 7,
+			email: 'inbox@example.com',
+			isDel: isDel.NORMAL
+		});
+		mocks.selectUser.mockResolvedValue(userRow);
+
+		await handleEmail(message(), {}, {});
+
+		expect(mocks.receive).toHaveBeenCalledWith(
+			{ env: {} },
+			expect.objectContaining({ userId: 0, accountId: 0 }),
+			expect.any(Array),
+			undefined
+		);
+		expect(mocks.completeReceive).toHaveBeenCalledWith(
+			{ env: {} },
+			emailConst.status.NOONE,
+			1
+		);
+	});
+
+	it.each([
+		['soft-deleted', {
+			userId: 7,
+			email: 'inbox@example.com',
+			status: userConst.status.NORMAL,
+			isDel: isDel.DELETE
+		}],
+		['disabled', {
+			userId: 7,
+			email: 'inbox@example.com',
+			status: userConst.status.BAN,
+			isDel: isDel.NORMAL
+		}]
+	])('rejects a %s mailbox owner when no-recipient mail is disabled', async (_kind, userRow) => {
+		mocks.querySetting.mockResolvedValue(settings({
+			noRecipient: settingConst.noRecipient.CLOSE
+		}));
+		mocks.selectAccount.mockResolvedValue({
+			accountId: 21,
+			userId: 7,
+			email: 'inbox@example.com',
+			isDel: isDel.NORMAL
+		});
+		mocks.selectUser.mockResolvedValue(userRow);
+		const incoming = message();
+
+		await handleEmail(incoming, {}, {});
+
+		expect(incoming.setReject).toHaveBeenCalledWith('Recipient not found');
+		expect(mocks.receive).not.toHaveBeenCalled();
+	});
+
+	it('does not persist mail when recipient-owner lookup fails', async () => {
+		mocks.selectAccount.mockResolvedValue({
+			accountId: 21,
+			userId: 7,
+			email: 'inbox@example.com',
+			isDel: isDel.NORMAL
+		});
+		mocks.selectUser.mockRejectedValue(new Error('D1 unavailable'));
+
+		await expect(handleEmail(message(), {}, {})).rejects.toThrow('D1 unavailable');
+
+		expect(mocks.receive).not.toHaveBeenCalled();
+		expect(mocks.completeReceive).not.toHaveBeenCalled();
 	});
 
 	it('ignores empty and whitespace-only blacklist entries', async () => {

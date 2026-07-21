@@ -108,6 +108,7 @@
           class="add-email-turnstile"
           :class="verifyShow ? 'turnstile-show' : 'turnstile-hide'"
           :data-sitekey="settingStore.settings.siteKey"
+          data-action="add-account"
           data-callback="onTurnstileSuccess"
           data-error-callback="onTurnstileError"
       >

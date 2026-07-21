@@ -80,6 +80,7 @@ const ja = {
     deleteUser: 'アカウント削除',
     deleteUserBtn: 'アカウント削除',
     changePassword: 'パスワード変更',
+    currentPassword: '現在のパスワード',
     newPassword: '新しいパスワード',
     confirmPassword: 'パスワード確認',
     add: '追加',

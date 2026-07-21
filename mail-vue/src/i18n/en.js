@@ -80,6 +80,7 @@ const en = {
     deleteUser: 'Delete Account',
     deleteUserBtn: 'Delete',
     changePassword: 'Change Password',
+    currentPassword: 'Current password',
     newPassword: 'New password',
     confirmPassword: 'Confirm password',
     add: 'Add',

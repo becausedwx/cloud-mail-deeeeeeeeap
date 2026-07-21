@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { t } from '../src/i18n/i18n';
 
 const ormState = vi.hoisted(() => ({
 	rows: []
@@ -88,13 +89,50 @@ describe('public service import safety', () => {
 
 		expect(insertUser.sql).toContain('VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 		expect(insertUser.bindings[0]).toBe('safe@example.com');
-		expect(insertAccount.sql).toContain('VALUES (?, ?, 0)');
+		expect(insertAccount.sql).toContain('SELECT ?, ?, user_id');
+		expect(insertAccount.sql).toContain('WHERE email = ?');
 		expect(insertAccount.bindings[0]).toBe('safe@example.com');
+		expect(insertAccount.bindings[2]).toBe('safe@example.com');
+		expect(statements).not.toEqual(expect.arrayContaining([
+			expect.objectContaining({ sql: expect.stringContaining('UPDATE account SET user_id') })
+		]));
 	});
 
 	it('rejects invalid public user import payloads', async () => {
 		await expect(publicService.addUser({ env: {} }, { list: 'not-array' })).rejects.toThrow('list must be an array');
 		await expect(publicService.addUser({ env: {} }, { list: [null] })).rejects.toThrow('list item must be an object');
+	});
+
+	it('rejects public imports above the 100-user boundary before database work', async () => {
+		const prepare = vi.fn();
+		const list = Array.from({ length: 101 }, (_, index) => ({
+			email: `user-${index}@example.com`,
+			password: 'secure-password'
+		}));
+
+		await expect(publicService.addUser({
+			env: { db: { prepare } }
+		}, { list })).rejects.toThrow('A maximum of 100 users can be imported at once');
+		expect(prepare).not.toHaveBeenCalled();
+	});
+
+	it('preserves public import domain and password validation', async () => {
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				domain: ['example.com']
+			}
+		};
+
+		await expect(publicService.addUser(c, {
+			list: [{ email: 'user@other.test', password: 'secure-password' }]
+		})).rejects.toThrow(t('notEmailDomain'));
+		await expect(publicService.addUser(c, {
+			list: [{ email: 'user@example.com', password: 'short' }]
+		})).rejects.toThrow(t('pwdMinLength'));
+		await expect(publicService.addUser(c, {
+			list: [{ email: 'user@example.com', password: 123456 }]
+		})).rejects.toThrow(t('pwdLengthLimit'));
 	});
 
 	it('returns only preview text from public email list by default', async () => {

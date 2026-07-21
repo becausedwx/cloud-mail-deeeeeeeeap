@@ -168,7 +168,7 @@ describe('administrator security boundaries', () => {
 		const oversizedPassword = 'x'.repeat(31);
 		await expect(userService.resetPassword(
 			{ env: {} },
-			{ password: oversizedPassword },
+			{ currentPassword: 'current-password', newPassword: oversizedPassword },
 			1
 		)).rejects.toMatchObject({ code: 501 });
 		await expect(userService.add({

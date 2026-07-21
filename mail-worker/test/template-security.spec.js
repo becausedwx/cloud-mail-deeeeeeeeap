@@ -3,6 +3,19 @@ import emailHtmlTemplate from '../src/template/email-html';
 import emailTextTemplate from '../src/template/email-text';
 
 describe('telegram email templates', () => {
+	it('renders sanitized HTML directly without relying on inline scripts', () => {
+		const html = emailHtmlTemplate(`
+			<body style="color: red">
+				<p id="message">Hello from Telegram</p>
+			</body>
+		`, 'https://assets.example.com');
+
+		expect(html).toContain('<p id="message">Hello from Telegram</p>');
+		expect(html).not.toMatch(/<script\b/i);
+		expect(html).not.toContain('renderHTML(');
+		expect(html).not.toContain('shadowRoot.innerHTML');
+	});
+
 	it('sanitizes active HTML before embedding it in the telegram web app view', () => {
 		const html = emailHtmlTemplate(`
 			<body style="color:red; background:url(javascript:alert(1));">

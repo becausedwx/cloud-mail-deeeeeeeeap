@@ -1,142 +1,90 @@
+import { parseHTML } from 'linkedom';
 import domainUtils from '../utils/domain-uitls';
-import { jsStringLiteral, sanitizeEmailHtml } from '../utils/html-sanitize';
+import { escapeHtml, sanitizeEmailHtml } from '../utils/html-sanitize';
+
+function renderableEmailContent(html) {
+	const { document } = parseHTML(html);
+	const body = document.querySelector('body');
+
+	if (!body) {
+		return { bodyStyle: '', content: document.toString() };
+	}
+
+	return {
+		bodyStyle: body.getAttribute('style') || '',
+		content: body.innerHTML
+	};
+}
 
 export default function emailHtmlTemplate(html, domain) {
-
-	html = sanitizeEmailHtml(html);
-	html = html.replace(/{{domain}}/g, domainUtils.toOssDomain(domain) + '/');
-	const htmlLiteral = jsStringLiteral(html);
+	const sanitizedHtml = sanitizeEmailHtml(html)
+		.replace(/{{domain}}/g, domainUtils.toOssDomain(domain) + '/');
+	const { bodyStyle, content } = renderableEmailContent(sanitizedHtml);
+	const bodyStyleAttribute = bodyStyle ? ` style="${escapeHtml(bodyStyle)}"` : '';
 
 	return `<!DOCTYPE html>
-<html lang='en' >
+<html lang='en'>
 <head>
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <style>
-        * {
+        html,
+        body {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
             background: #FFF;
+            width: 100%;
+            min-height: 100%;
         }
 
         .content-box {
-        		padding: 15px 10px;
+            box-sizing: border-box;
+            padding: 15px 10px;
             width: 100%;
             height: 100%;
-            overflow: auto; /* 改为 auto 允许滚动 */
-            font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            overflow: auto;
         }
 
         .content-html {
+            box-sizing: border-box;
             width: 100%;
-            height: 100%;
+            min-height: 100%;
+            font-family: Inter, -apple-system, BlinkMacSystemFont,
+                         'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: #13181D;
+            word-break: break-word;
+        }
+
+        .content-html h1,
+        .content-html h2,
+        .content-html h3,
+        .content-html h4 {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .content-html p {
+            margin: 0;
+        }
+
+        .content-html a {
+            text-decoration: none;
+            color: #0E70DF;
+        }
+
+        .content-html img:not(table img) {
+            max-width: 100% !important;
+            height: auto !important;
         }
     </style>
 </head>
 <body>
     <div class='content-box'>
-        <div id='container' class='content-html'></div>
+        <div id='container' class='content-html'${bodyStyleAttribute}>${content}</div>
     </div>
-
-    <script>
-
-        function renderHTML(html) {
-            const container = document.getElementById('container');
-            const shadowRoot = container.attachShadow({ mode: 'open' });
-
-            // 提取 <body> 的 style 属性
-            const bodyStyleRegex = /<body[^>]*style="([^"]*)"[^>]*>/i;
-            const bodyStyleMatch = html.match(bodyStyleRegex);
-            const bodyStyle = bodyStyleMatch ? bodyStyleMatch[1] : '';
-
-            // 移除 <body> 标签
-            const cleanedHtml = html.replace(/<\\/?body[^>]*>/gi, '');
-
-            // 渲染内容
-            shadowRoot.innerHTML = \`
-                <style>
-                    :host {
-                        all: initial;
-                        width: 100%;
-                        height: 100%;
-                        font-family: Inter, -apple-system, BlinkMacSystemFont,
-                                    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                        font-size: 14px;
-                        line-height: 1.5;
-                        color: #13181D;
-                        word-break: break-word;
-                        overflow: auto; /* 添加滚动 */
-                    }
-
-                    h1, h2, h3, h4 {
-                        font-size: 18px;
-                        font-weight: 700;
-                    }
-
-                    p {
-                        margin: 0;
-                    }
-
-                    a {
-                        text-decoration: none;
-                        color: #0E70DF;
-                    }
-
-                    .shadow-content {
-                        background: #FFFFFF;
-                        width: fit-content;
-                        height: fit-content;
-                        min-width: 100%;
-                    }
-
-                    img:not(table img) {
-                        max-width: 100% !important;
-                        height: auto !important;
-                    }
-                </style>
-                <div class="shadow-content">
-                    \${cleanedHtml}
-                </div>
-            \`;
-
-            if (bodyStyle) {
-                const shadowContent = shadowRoot.querySelector('.shadow-content');
-                if (shadowContent) {
-                    shadowContent.setAttribute('style', bodyStyle);
-                }
-            }
-
-            // 自动缩放
-            autoScale(shadowRoot, container);
-        }
-
-        function autoScale(shadowRoot, container) {
-
-            if (!shadowRoot || !container) return;
-
-            const parent = container;
-            const shadowContent = shadowRoot.querySelector('.shadow-content');
-
-            if (!shadowContent) return;
-
-            const parentWidth = parent.offsetWidth;
-            const childWidth = shadowContent.scrollWidth;
-
-            if (childWidth === 0) return;
-
-            const scale = parentWidth / childWidth;
-
-            const hostElement = shadowRoot.host;
-            hostElement.style.zoom = scale;
-        }
-
-        // 使用示例
-        const exampleHtml = ${htmlLiteral};
-
-        // 渲染HTML
-        renderHTML(exampleHtml);
-    </script>
 </body>
-</html>`
+</html>`;
 }

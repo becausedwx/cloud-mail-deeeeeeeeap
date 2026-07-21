@@ -84,6 +84,7 @@
           <div v-show="verifyShow"
                class="register-turnstile"
                :data-sitekey="settingStore.settings.siteKey"
+               data-action="register"
                data-callback="onTurnstileSuccess"
                data-error-callback="onTurnstileError"
                data-after-interactive-callback="loadAfter"

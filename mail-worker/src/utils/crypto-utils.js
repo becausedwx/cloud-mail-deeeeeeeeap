@@ -5,6 +5,7 @@ const PBKDF2_HASH_BYTES = 32;
 const PASSWORD_HASH_INPUT_MAX_LENGTH = 1024;
 
 export const PBKDF2_ITERATIONS = 100000;
+export const PBKDF2_MAX_ITERATIONS = PBKDF2_ITERATIONS * 5;
 
 function bytesToBase64(bytes) {
 	return btoa(String.fromCharCode(...bytes));
@@ -12,6 +13,17 @@ function bytesToBase64(bytes) {
 
 function base64ToBytes(value) {
 	return Uint8Array.from(atob(value), char => char.charCodeAt(0));
+}
+
+function parsePbkdf2HashBytes(value) {
+	try {
+		const bytes = base64ToBytes(value);
+		return bytes.length === PBKDF2_HASH_BYTES && bytesToBase64(bytes) === value
+			? bytes
+			: null;
+	} catch (e) {
+		return null;
+	}
 }
 
 function constantTimeEqual(left, right) {
@@ -33,17 +45,23 @@ function parsePbkdf2Hash(storedHash) {
 	}
 
 	const [prefix, version, iterationsValue, encodedHash, extra] = storedHash.split('$');
-	const iterations = Number(iterationsValue);
 	if (extra !== undefined
 		|| prefix !== PBKDF2_PREFIX
 		|| version !== PBKDF2_VERSION
-		|| !Number.isInteger(iterations)
-		|| iterations <= 0
+		|| !/^[1-9]\d*$/.test(iterationsValue)
 		|| !encodedHash) {
 		return null;
 	}
+	const iterations = Number(iterationsValue);
+	if (!Number.isSafeInteger(iterations) || iterations > PBKDF2_MAX_ITERATIONS) {
+		return null;
+	}
+	const hashBytes = parsePbkdf2HashBytes(encodedHash);
+	if (!hashBytes) {
+		return null;
+	}
 
-	return { iterations, encodedHash };
+	return { iterations, hashBytes };
 }
 
 const saltHashUtils = {
@@ -106,7 +124,7 @@ const saltHashUtils = {
 			if (!parsed) return false;
 			try {
 				const actual = await this.derivePbkdf2(inputPassword, salt, parsed.iterations);
-				return constantTimeEqual(actual, base64ToBytes(parsed.encodedHash));
+				return constantTimeEqual(actual, parsed.hashBytes);
 			} catch (e) {
 				return false;
 			}

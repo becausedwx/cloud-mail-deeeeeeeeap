@@ -260,12 +260,13 @@ const publicService = {
 			`).bind(email, hash, salt, type, os, browser, activeIp, activeIp, device, activeTime, activeTime));
 			userList.push(c.env.db.prepare(`
 				INSERT INTO account (email, name, user_id)
-				VALUES (?, ?, 0)
-			`).bind(email, emailUtils.getName(email)));
+				SELECT ?, ?, user_id
+				FROM user
+				WHERE email = ?
+				LIMIT 1
+			`).bind(email, emailUtils.getName(email), email));
 
 		}
-
-		userList.push(c.env.db.prepare(`UPDATE account SET user_id = (SELECT user_id FROM user WHERE user.email = account.email) WHERE user_id = 0;`))
 
 		try {
 			await c.env.db.batch(userList);

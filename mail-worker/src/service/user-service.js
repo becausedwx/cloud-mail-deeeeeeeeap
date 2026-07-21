@@ -21,6 +21,21 @@ import oauthService from "./oauth-service";
 import { chunkArray, truncateLikeTerm } from '../utils/sql-utils';
 import { selectLoginUserContext } from './login-user-info-query';
 
+function assertValidNewPassword(password) {
+	if (typeof password !== 'string' || password.length < 6) {
+		throw new BizError(t('pwdMinLength'));
+	}
+	if (password.length > 30) {
+		throw new BizError(t('pwdLengthLimit'));
+	}
+}
+
+async function replacePassword(c, password, userId) {
+	assertValidNewPassword(password);
+	const { salt, hash } = await cryptoUtils.hashPassword(password);
+	await orm(c).update(user).set({ password: hash, salt }).where(eq(user.userId, userId)).run();
+}
+
 const userService = {
 
 	async loginUserInfo(c, userId) {
@@ -55,17 +70,51 @@ const userService = {
 
 
 	async resetPassword(c, params, userId) {
-
-		const { password } = params;
-
-		if (typeof password !== 'string' || password.length < 6) {
-			throw new BizError(t('pwdMinLength'));
+		if (!params || typeof params !== 'object' || Array.isArray(params)) {
+			throw new BizError(t('IncorrectPwd'), 400);
 		}
-		if (password.length > 30) {
-			throw new BizError(t('pwdLengthLimit'));
+		const { currentPassword, newPassword } = params;
+		if (typeof currentPassword !== 'string' || currentPassword.length === 0) {
+			throw new BizError(t('IncorrectPwd'), 400);
 		}
-		const { salt, hash } = await cryptoUtils.hashPassword(password);
-		await orm(c).update(user).set({ password: hash, salt: salt }).where(eq(user.userId, userId)).run();
+		assertValidNewPassword(newPassword);
+
+		const userRow = await this.selectById(c, userId);
+		if (!userRow
+			|| !await cryptoUtils.verifyPassword(currentPassword, userRow.salt, userRow.password)) {
+			throw new BizError(t('IncorrectPwd'), 400);
+		}
+
+		const nextPassword = await cryptoUtils.hashPassword(newPassword);
+		const updated = await this.compareAndSetPasswordHash(
+			c,
+			userId,
+			nextPassword,
+			{ hash: userRow.password, salt: userRow.salt }
+		);
+		if (!updated) {
+			throw new BizError(t('IncorrectPwd'), 409);
+		}
+
+		try {
+			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
+		} catch (e) {
+			let rolledBack = false;
+			try {
+				rolledBack = await this.compareAndSetPasswordHash(
+					c,
+					userId,
+					{ hash: userRow.password, salt: userRow.salt },
+					nextPassword
+				);
+			} catch (rollbackError) {
+				console.error('Password reset rollback failed after session revocation error');
+			}
+			if (!rolledBack) {
+				console.error('Password reset could not restore the previous password after session revocation error');
+			}
+			throw new BizError('Unable to revoke existing sessions', 503);
+		}
 	},
 
 	async compareAndSetPasswordHash(c, userId, { hash, salt }, expected) {
@@ -310,7 +359,7 @@ const userService = {
 	async setPwd(c, params) {
 
 		const { password, userId } = params;
-		await this.resetPassword(c, { password }, userId);
+		await replacePassword(c, password, userId);
 		await c.env.kv.delete(KvConst.AUTH_INFO + userId);
 	},
 

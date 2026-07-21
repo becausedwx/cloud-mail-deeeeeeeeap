@@ -8,10 +8,15 @@ import {websiteConfig} from "@/request/setting.js";
 import i18n, {detectLang, normalizeLang} from "@/i18n/index.js";
 import {
     clearAuthSession,
+    getSessionGeneration,
     installDynamicRoutes,
     resetSessionState,
     startAuthSession
 } from "@/session/auth-session.js";
+import {
+    assertSafeAuthenticatedMount,
+    initializeAuthenticatedSession
+} from "@/init/auth-bootstrap.js";
 
 export async function init() {
     document.title = '\u200B'
@@ -33,29 +38,42 @@ export async function init() {
 
     if (token) {
         startAuthSession(token);
-        const userPromise = loginUserInfo().catch(e => {
-            console.error(e);
-            return null;
-        });
+        const sessionGeneration = getSessionGeneration();
+        const userOutcomePromise = loginUserInfo().then(
+            user => ({user}),
+            error => ({error})
+        );
 
-        const [s, user] = await Promise.all([websiteConfig(), userPromise]);
+        const [s, userOutcome] = await Promise.all([websiteConfig(), userOutcomePromise]);
         setting = s;
         settingStore.settings = setting;
         settingStore.domainList = setting.domainList;
         document.title = setting.title;
 
-        if (user) {
-            accountStore.currentAccountId = user.account.accountId;
-            accountStore.currentAccount = user.account;
-            userStore.user = user;
+        const authResult = await initializeAuthenticatedSession({
+            token,
+            sessionGeneration,
+            loadUser: async () => {
+                if ('error' in userOutcome) throw userOutcome.error;
+                return userOutcome.user;
+            },
+            getToken: () => localStorage.getItem('token'),
+            getCurrentGeneration: getSessionGeneration,
+            clearSession: clearAuthSession,
+            applyUser: user => {
+                accountStore.currentAccountId = user.account.accountId;
+                accountStore.currentAccount = user.account;
+                userStore.user = user;
 
-            const routers = permsToRouter(user.permKeys);
-            installDynamicRoutes(router, routers);
-        } else if (localStorage.getItem('token')) {
-            // 非 401 失败(网络/服务端错误)时 token 仍在本地：
-            // 清除登录态回到登录页，避免带着空用户信息进入主界面导致渲染崩溃
-            await clearAuthSession({redirect: false});
-        }
+                const routers = permsToRouter(user.permKeys);
+                installDynamicRoutes(router, routers);
+            }
+        });
+        assertSafeAuthenticatedMount({
+            authResult,
+            currentToken: localStorage.getItem('token'),
+            currentUser: userStore.user
+        });
 
     } else {
         resetSessionState();

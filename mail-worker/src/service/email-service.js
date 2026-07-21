@@ -463,7 +463,7 @@ const emailService = {
 		//如果是回复邮件
 		if (sendType === 'reply') {
 
-			emailRow = await this.selectById(c, emailId);
+			emailRow = await this.selectReplyTarget(c, emailId, userId);
 
 			if (!emailRow) {
 				throw new BizError(t('notExistEmailReply'));
@@ -1167,6 +1167,16 @@ const emailService = {
 			and(eq(email.emailId, emailId),
 				eq(email.isDel, isDel.NORMAL)))
 			.get();
+	},
+
+	selectReplyTarget(c, emailId, userId) {
+		return orm(c).select().from(email).where(
+			and(
+				eq(email.emailId, emailId),
+				eq(email.userId, userId),
+				eq(email.isDel, isDel.NORMAL)
+			)
+		).get();
 	},
 
 	async detail(c, params, userId, includeDeleted = false) {
