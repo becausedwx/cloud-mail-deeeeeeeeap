@@ -42,6 +42,10 @@ http.interceptors.response.use(async res => {
     getSessionGeneration()
   )
 
+  if (classification.kind === 'canceled') {
+    return Promise.reject(error)
+  }
+
   if (classification.kind === 'unauthorized') {
     if (currentResponse) {
       if (!noMsg) showApiMessage(classification.payload?.message, 'error')
