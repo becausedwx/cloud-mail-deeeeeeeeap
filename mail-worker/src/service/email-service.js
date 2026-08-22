@@ -1664,7 +1664,13 @@ const emailService = {
 	},
 
 	async failReceive(c, emailId, message) {
-		await orm(c).update(email).set({
+		// 收信行插入时是 is_del=DELETE，只有 completeReceive 会翻回 NORMAL。失败时若不一起翻回，
+		// 这封信 status=FAILED 所以恢复扫描（只扫 SAVING）永远捞不到，is_del=DELETE 所以列表也看不见，
+		// 而 Cloudflare 早已 250 接收、发件人不会重投 —— 一次 R2 抖动就静默吞掉一封信。
+		// 正文与发件人在插入时已落库，翻出来至少让收件人知道信到过；残缺附件仍被
+		// parentEmailReadyCondition 按 status 挡在下载之外，可见性放开不影响访问控制。
+		const result = await orm(c).update(email).set({
+			isDel: isDel.NORMAL,
 			status: emailConst.status.FAILED,
 			message: normalizeReceiveFailureCode(message),
 			recoveryAfter: null
@@ -1673,6 +1679,15 @@ const emailService = {
 			eq(email.type, emailConst.type.RECEIVE),
 			eq(email.status, emailConst.status.SAVING)
 		)).run();
+
+		if (!result?.meta || result.meta.changes > 0) {
+			try {
+				await emailSearchService.syncEmailIds(c, [emailId]);
+			} catch (e) {
+				// 这里本就在处理失败，搜索表补录再失败不该盖掉已经生效的可见性修正
+				console.warn('failReceive search sync failed');
+			}
+		}
 	},
 
 	async deferReceiveRecovery(c, emailId) {

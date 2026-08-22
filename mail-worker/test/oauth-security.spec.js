@@ -66,6 +66,9 @@ describe('LinuxDo OAuth state and PKCE security', () => {
 		await clearTable('oauth');
 		await clearTable('account');
 		await clearTable('user');
+		// 这里的 c.req.header 恒返回空串，全部用例共用同一个限流身份，
+		// 不清会让上一个用例攒下的失败计数把下一个用例的绑定打成 429
+		await clearTable('auth_failure_limit');
 		const kvKeys = await env.kv.list();
 		await Promise.all(kvKeys.keys.map(key => env.kv.delete(key.name)));
 	});
@@ -569,6 +572,54 @@ describe('LinuxDo OAuth state and PKCE security', () => {
 
 		await env.db.prepare('UPDATE setting SET register = 0').run();
 		await settingService.refresh(c);
+	});
+
+	it('rate limits OAuth bind registration by source so rotating emails cannot enumerate accounts', async () => {
+		const c = context();
+		await env.db.prepare(`
+			UPDATE setting
+			SET register = 0, reg_key = 1, register_verify = 1
+		`).run();
+		await settingService.refresh(c);
+		roleService.clearCache();
+
+		// 每次探测都换一个已存在的邮箱：限流若仍按 email 分桶，配额永远刷不满
+		const probes = Array.from({ length: 6 }, (_, index) => `probe-${index}@example.com`);
+		for (const [index, probeEmail] of probes.entries()) {
+			await env.db.batch([
+				env.db.prepare(`
+					INSERT INTO user (user_id, email, type, password, salt, status, is_del)
+					VALUES (?, ?, 1, 'hash', 'salt', 0, 0)
+				`).bind(900 + index, probeEmail),
+				env.db.prepare(`
+					INSERT INTO account (account_id, email, name, user_id, is_del)
+					VALUES (?, ?, 'Probe', ?, 0)
+				`).bind(900 + index, probeEmail, 900 + index)
+			]);
+		}
+
+		await oauthService.saveUser(c, {
+			oauthUserId: 'enum-probe-user',
+			username: 'enum-probe-user',
+			name: 'Enum Probe User',
+			active: 0,
+			trustLevel: 1,
+			silenced: 0
+		});
+		const bindToken = await oauthService.issueBindToken(c, 'enum-probe-user');
+
+		const codes = [];
+		for (const probeEmail of probes) {
+			codes.push(await oauthService.bindUser(c, { email: probeEmail, bindToken })
+				.then(() => 200, error => error.code));
+		}
+
+		// 前几次是「该邮箱已注册」，攒够失败后转为 429：轮换邮箱不再能无限试探
+		expect(codes).not.toContain(200);
+		expect(codes.filter(code => code === 429).length).toBeGreaterThan(0);
+		expect(codes.at(-1)).toBe(429);
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM user').first())
+			.toMatchObject({ count: probes.length });
 	});
 
 	it('keeps active bind flows while removing expired state and stale unbound identities', async () => {

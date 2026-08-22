@@ -49,6 +49,10 @@ const REQUIRED_UNIQUE_INDEXES = {
 };
 
 export const BOOTSTRAP_STATUS_CACHE_TTL_MS = 15_000;
+// 未就绪的结果默认不缓存，好让另一个 isolate 跑完 /init 后立刻可见。
+// 但匿名的 /init/status 一旦被刷，每个请求都要跑整套 PRAGMA 与索引探测，
+// 所以只给该入口开一个远短于就绪缓存的窗口，够挡住重放又不影响安装向导的手感。
+export const BOOTSTRAP_PENDING_STATUS_CACHE_TTL_MS = 3_000;
 export const BOOTSTRAP_STATUS_CHECK_VERSION = 'bootstrap-v3.8-verify-record-index';
 
 const readyCacheByDb = new WeakMap();
@@ -275,6 +279,10 @@ export async function getBootstrapStatus(c, options = {}) {
 	const ttlMs = Number.isFinite(options.ttlMs)
 		? Math.max(0, options.ttlMs)
 		: BOOTSTRAP_STATUS_CACHE_TTL_MS;
+	const cachePending = options.cachePending === true;
+	const pendingTtlMs = Number.isFinite(options.pendingTtlMs)
+		? Math.max(0, options.pendingTtlMs)
+		: BOOTSTRAP_PENDING_STATUS_CACHE_TTL_MS;
 	const key = cacheKeyFor(c, version);
 	const epoch = cacheEpochByDb.get(db) || 0;
 	const cache = readyCacheByDb.get(db);
@@ -299,12 +307,13 @@ export async function getBootstrapStatus(c, options = {}) {
 	inFlightByDb.get(db).set(key, entry);
 	try {
 		const status = await promise;
-		if (status.ready && (cacheEpochByDb.get(db) || 0) === epoch) {
+		const cacheable = status.ready || cachePending;
+		if (cacheable && (cacheEpochByDb.get(db) || 0) === epoch) {
 			if (!readyCacheByDb.has(db)) readyCacheByDb.set(db, new Map());
 			readyCacheByDb.get(db).set(key, {
 				version,
 				epoch,
-				expiresAt: now() + ttlMs,
+				expiresAt: now() + (status.ready ? ttlMs : pendingTtlMs),
 				status: cloneStatus(status)
 			});
 		}

@@ -224,7 +224,8 @@ const accountService = {
 	},
 
 	async restoreByEmail(c, email) {
-		await orm(c).update(account).set({isDel: isDel.NORMAL}).where(eq(account.email, email)).run();
+		// 与 idx_account_email_nocase 对齐；二进制 = 既走不了索引，大小写不一致时还会静默不更新
+		await orm(c).update(account).set({isDel: isDel.NORMAL}).where(sql`${account.email} COLLATE NOCASE = ${email}`).run();
 	},
 
 	async restoreByUserId(c, userId) {
@@ -288,7 +289,8 @@ const accountService = {
 		const userRow = await userService.selectById(c, userId);
 		const mainAccountRow = await accountService.selectByEmailIncludeDel(c, userRow.email);
 		let mainSort = mainAccountRow.sort === 0 ? 2 : mainAccountRow.sort + 1;
-		await orm(c).update(account).set({ sort: mainSort }).where(eq(account.email, userRow.email )).run();
+		// 上一行用 selectByEmailIncludeDel（NOCASE）取到了行，这里若用二进制 = 会找不到同一行而静默失败
+		await orm(c).update(account).set({ sort: mainSort }).where(sql`${account.email} COLLATE NOCASE = ${userRow.email}`).run();
 		await orm(c).update(account).set({ sort: mainSort - 1 }).where(and(eq(account.accountId, accountId),eq(account.userId,userId))).run();
 	}
 };

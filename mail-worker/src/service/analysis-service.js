@@ -9,10 +9,32 @@ import { toUtc } from '../utils/date-uitil';
 
 const ANALYSIS_REFRESH_CONCURRENCY = 3;
 const ANALYSIS_NUMBER_COUNT_TTL_SECONDS = 35 * 60;
+// 略长于 30 分钟的 cron 间隔，正常刷新期间不会中途过期；cron 一旦停摆，键也不会永久堆在 KV 里
+const ANALYSIS_ECHARTS_TTL_SECONDS = 35 * 60;
+
+// IANA 时区匹配大小写不敏感，asia/shanghai、Asia/Shanghai、ASIA/SHANGHAI 是同一个时区，
+// 但拼进缓存键就成了三个 KV 条目，而 cron 会把每个键都拿去跑一遍完整聚合。
+// 先归一到规范名，同一时区只留一个键；无法识别的值回退 UTC，与下游 params.timeZone 的默认一致。
+function normalizeTimeZone(timeZone) {
+	const candidate = typeof timeZone === 'string' ? timeZone.trim() : '';
+	if (!candidate) {
+		return 'UTC';
+	}
+	try {
+		return new Intl.DateTimeFormat('en-US', { timeZone: candidate }).resolvedOptions().timeZone;
+	} catch (e) {
+		return 'UTC';
+	}
+}
 
 const analysisService = {
 
 	async echarts(c, params) {
+		// 走缓存时时区由 echartsCacheKey 归一，这里补上不走缓存的分支，
+		// 避免同一个请求因 analysis_cache 开关不同而一边正常返回、一边抛时区解析异常
+		const timeZone = normalizeTimeZone(params?.timeZone);
+		params = { ...params, timeZone };
+
 		if (!this.analysisCacheEnabled(c)) {
 			return await this.queryEcharts(c, params);
 		}
@@ -30,7 +52,7 @@ const analysisService = {
 	async refreshEchartsCacheByKey(c, cacheKey, options = {}) {
 		const params = this.echartsParamsByCacheKey(cacheKey);
 		const data = await this.queryEcharts(c, params, options);
-		await c.env.kv.put(cacheKey, JSON.stringify(data));
+		await c.env.kv.put(cacheKey, JSON.stringify(data), { expirationTtl: ANALYSIS_ECHARTS_TTL_SECONDS });
 		return data;
 	},
 
@@ -209,7 +231,7 @@ const analysisService = {
 	},
 
 	echartsCacheKey(params = {}) {
-		return kvConst.ANALYSIS_ECHARTS + encodeURIComponent(params.timeZone || 'UTC');
+		return kvConst.ANALYSIS_ECHARTS + encodeURIComponent(normalizeTimeZone(params.timeZone));
 	},
 
 	echartsParamsByCacheKey(cacheKey) {

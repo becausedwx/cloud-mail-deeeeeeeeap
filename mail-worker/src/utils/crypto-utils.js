@@ -3,6 +3,9 @@ const PBKDF2_PREFIX = 'pbkdf2-sha256';
 const PBKDF2_VERSION = 'v1';
 const PBKDF2_HASH_BYTES = 32;
 const PASSWORD_HASH_INPUT_MAX_LENGTH = 1024;
+// 账号不存在时若直接返回，响应耗时会比「账号存在但密码错」少一整轮 PBKDF2，
+// 统一的失败文案就形同虚设；这个固定盐只用于付出等价代价，不参与任何真实校验
+const DECOY_SALT = 'Y2xvdWQtbWFpbC1kZWNveQ==';
 
 export const PBKDF2_ITERATIONS = 100000;
 export const PBKDF2_MAX_ITERATIONS = PBKDF2_ITERATIONS * 5;
@@ -136,6 +139,21 @@ const saltHashUtils = {
 		} catch (e) {
 			return false;
 		}
+	},
+
+	// 账号不存在时调用，跑一次与真实校验等价的 PBKDF2 后恒定返回 false。
+	// 否则"查无此人"立即返回而"密码错误"要算十万轮，响应耗时本身就暴露邮箱是否已注册
+	async burnPasswordVerification(inputPassword) {
+		const password = typeof inputPassword === 'string'
+			&& inputPassword.length <= PASSWORD_HASH_INPUT_MAX_LENGTH
+			? inputPassword
+			: '';
+		try {
+			await this.derivePbkdf2(password, DECOY_SALT, PBKDF2_ITERATIONS);
+		} catch (e) {
+			// 诱饵计算只为抹平时间差，失败不改变调用方的失败语义
+		}
+		return false;
 	},
 
 	needsPasswordUpgrade(storedHash) {

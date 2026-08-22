@@ -160,7 +160,7 @@ describe('incoming attachment recovery', () => {
 
 		expect(emailRow).toEqual(expect.objectContaining({
 			status: emailConst.status.FAILED,
-			isDel: isDel.DELETE
+			isDel: isDel.NORMAL
 		}));
 		expect(attachmentRow).toEqual({
 			status: attConst.status.FAILED,
@@ -233,7 +233,7 @@ describe('incoming attachment recovery', () => {
 		`).bind(emailId).first();
 		expect(finalEmailRow).toEqual({
 			status: emailConst.status.FAILED,
-			isDel: isDel.DELETE
+			isDel: isDel.NORMAL
 		});
 		expect(finalAttachmentRow).toEqual({
 			status: attConst.status.FAILED,
@@ -565,7 +565,7 @@ describe('incoming attachment recovery', () => {
 		`).bind(emailId).first();
 		expect(row).toEqual({
 			status: emailConst.status.FAILED,
-			isDel: isDel.DELETE,
+			isDel: isDel.NORMAL,
 			message: 'ATTACHMENT_METADATA_MISSING'
 		});
 	});
@@ -589,7 +589,7 @@ describe('incoming attachment recovery', () => {
 		`).bind(emailId).first();
 		expect(emailRow).toEqual({
 			status: emailConst.status.FAILED,
-			isDel: isDel.DELETE
+			isDel: isDel.NORMAL
 		});
 		expect(attachmentRow).toEqual({
 			status: attConst.status.FAILED,
@@ -612,7 +612,7 @@ describe('incoming attachment recovery', () => {
 		`).bind(emailId).first();
 		expect(row).toEqual({
 			status: emailConst.status.FAILED,
-			isDel: isDel.DELETE,
+			isDel: isDel.NORMAL,
 			message: 'ATTACHMENT_STATE_INVALID'
 		});
 		expect(r2Service.exists).not.toHaveBeenCalled();
@@ -647,7 +647,7 @@ describe('incoming attachment recovery', () => {
 		`).bind(emailId).first();
 		expect(row).toEqual({
 			status: emailConst.status.FAILED,
-			isDel: isDel.DELETE,
+			isDel: isDel.NORMAL,
 			message: 'ATTACHMENT_RECOVERY_LIMIT_EXCEEDED'
 		});
 		expect(r2Service.exists).not.toHaveBeenCalled();

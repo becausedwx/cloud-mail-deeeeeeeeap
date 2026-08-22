@@ -298,7 +298,7 @@ const publicService = {
 		const currentUserRow = await userService.upgradePasswordHash(c, userRow, params.password);
 		if (!currentUserRow) {
 			await authRateLimitService.recordFailure(c, rateIdentity);
-			throw new BizError(t('IncorrectPwd'));
+			throw new BizError(t('loginFailed'));
 		}
 		await authRateLimitService.clear(c, rateIdentity);
 		userRow = currentUserRow;
@@ -316,16 +316,17 @@ const publicService = {
 
 		const userRow = await userService.selectByEmailIncludeDel(c, email);
 
-		if (!emailUtils.isSameAddress(email, c.env.admin)) {
-			throw new BizError(t('notAdmin'));
-		}
-
-		if (!userRow || userRow.isDel === isDel.DELETE) {
-			throw new BizError(t('notExistUser'));
+		// 该接口无需登录即可调用，三种失败必须同文案同耗时：
+		// 分开报错等于免费告诉攻击者哪个地址是管理员
+		if (!emailUtils.isSameAddress(email, c.env.admin)
+			|| !userRow
+			|| userRow.isDel === isDel.DELETE) {
+			await cryptoUtils.burnPasswordVerification(password);
+			throw new BizError(t('loginFailed'));
 		}
 
 		if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
-			throw new BizError(t('IncorrectPwd'));
+			throw new BizError(t('loginFailed'));
 		}
 
 		return userRow;

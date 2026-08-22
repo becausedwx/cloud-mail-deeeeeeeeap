@@ -215,10 +215,13 @@ describe('administrator security boundaries', () => {
 		const bindToken = await oauthService.issueBindToken({ env }, 'oauth-admin-attempt');
 
 		await expect(oauthService.bindUser({
+			// OAuth 绑定注册现在也过限流，需要 jwt_secret 派生限流身份、req 取来源 IP
+			req: { header: () => '' },
 			env: {
 				db: env.db,
 				kv: env.kv,
 				admin: 'admin@example.com',
+				jwt_secret: 'your-jwt-secret',
 				linuxdo_switch: true
 			}
 		}, {

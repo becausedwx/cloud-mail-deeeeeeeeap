@@ -8,6 +8,7 @@ import { emailConst, isDel, roleConst, userConst } from '../const/entity-const';
 import kvConst from '../const/kv-const';
 import KvConst from '../const/kv-const';
 import authInfoCache from '../security/auth-info-cache';
+import userContext from '../security/user-context';
 import cryptoUtils from '../utils/crypto-utils';
 import emailService from './email-service';
 import dayjs from 'dayjs';
@@ -158,9 +159,11 @@ const userService = {
 	},
 
 	selectByEmail(c, email) {
+		// 唯一索引是 user(email COLLATE NOCASE)，二进制 = 用不上它，会全表扫；
+		// 邮箱本就按大小写不敏感唯一，NOCASE 比较仍至多命中一行
 		return orm(c).select().from(user).where(
 			and(
-				eq(user.email, email),
+				sql`${user.email} COLLATE NOCASE = ${email}`,
 				eq(user.isDel, isDel.NORMAL)))
 			.get();
 	},
@@ -365,6 +368,15 @@ const userService = {
 	async setPwd(c, params) {
 
 		const { password, userId } = params;
+		// delete / physicsDelete / setStatus 都拦住了管理员这个目标，改密之前漏了：
+		// user:set-pwd 是可分配给普通角色的权限，缺这道校验就等于把管理员账号交出去
+		const userRow = await this.selectByIdIncludeDel(c, userId);
+		if (userRow && emailUtils.isSameAddress(userRow.email, c.env.admin)) {
+			const operator = userContext.getUser(c);
+			if (!operator || !emailUtils.isSameAddress(operator.email, c.env.admin)) {
+				throw new BizError('The administrator password can only be changed by the administrator', 403);
+			}
+		}
 		await replacePassword(c, password, userId);
 		await authInfoCache.remove(c, userId);
 	},
@@ -385,7 +397,9 @@ const userService = {
 			.where(eq(user.userId, userId))
 			.run();
 
-		if (status === userConst.status.BAN) {
+		// 同函数上方的管理员保护已用 Number(status)，说明字符串入参在预期内；
+		// 这里若用严格相等，传 "1" 会封禁入库却跳过撤销，旧会话一路有效到过期
+		if (Number(status) === userConst.status.BAN) {
 			await authInfoCache.remove(c, userId);
 		}
 	},

@@ -298,35 +298,32 @@ const deliveryAttemptService = {
 			).run();
 		}
 
-		const remainingBudget = Math.max(0, batchLimit - staleAttempts.length);
-		let attempts = [];
-		if (remainingBudget > 0) {
-			const result = await c.env.db.prepare(`
-				SELECT
-					da.attempt_id AS attemptId,
-					da.email_id AS emailId,
-					da.provider,
-					da.status,
-					da.provider_message_id AS providerMessageId,
-					e.status AS emailStatus
-				FROM delivery_attempt da
-				JOIN email e ON e.email_id = da.email_id
-				WHERE e.type = ?
-				  AND (
-					da.status = ?
-					OR (da.status IN (?, ?) AND e.status = ?)
-				  )
-				ORDER BY da.attempt_id
-				LIMIT ${remainingBudget}
-			`).bind(
-				emailConst.type.SEND,
-				deliveryAttemptConst.status.PENDING_ACK,
-				deliveryAttemptConst.status.ACCEPTED,
-				deliveryAttemptConst.status.FAILED,
-				emailConst.status.SAVING
-			).all();
-			attempts = result.results || [];
-		}
+		// 三段各自持有 batchLimit，不再共用一份额度：共用时只要每轮都有 batchLimit 条 stale 记录，
+		// 后两段就恒定分到 0，PENDING_ACK 转正和有证据的 UNKNOWN 收敛会被无限期饿死
+		const { results: attempts = [] } = await c.env.db.prepare(`
+			SELECT
+				da.attempt_id AS attemptId,
+				da.email_id AS emailId,
+				da.provider,
+				da.status,
+				da.provider_message_id AS providerMessageId,
+				e.status AS emailStatus
+			FROM delivery_attempt da
+			JOIN email e ON e.email_id = da.email_id
+			WHERE e.type = ?
+			  AND (
+				da.status = ?
+				OR (da.status IN (?, ?) AND e.status = ?)
+			  )
+			ORDER BY da.attempt_id
+			LIMIT ${batchLimit}
+		`).bind(
+			emailConst.type.SEND,
+			deliveryAttemptConst.status.PENDING_ACK,
+			deliveryAttemptConst.status.ACCEPTED,
+			deliveryAttemptConst.status.FAILED,
+			emailConst.status.SAVING
+		).all();
 
 		for (const attempt of attempts) {
 			if (attempt.status === deliveryAttemptConst.status.FAILED) {
@@ -389,31 +386,26 @@ const deliveryAttemptService = {
 		}
 		// 有 webhook 证据的 UNKNOWN 自动收敛：邮件状态已被回调推进（非 SAVING/FAILED），
 		// 或已记录 provider message id，说明供应商实际接受过这次投递。
-		const unknownBudget = Math.max(0, batchLimit - staleAttempts.length - attempts.length);
-		let unknownAttempts = [];
-		if (unknownBudget > 0) {
-			const result = await c.env.db.prepare(`
-				SELECT
-					da.attempt_id AS attemptId,
-					da.email_id AS emailId,
-					da.provider,
-					da.provider_message_id AS providerMessageId,
-					e.status AS emailStatus,
-					e.resend_email_id AS emailProviderMessageId
-				FROM delivery_attempt da
-				JOIN email e ON e.email_id = da.email_id AND e.type = ?
-				WHERE da.status = ?
-				  AND (e.status NOT IN (?, ?) OR e.resend_email_id IS NOT NULL)
-				ORDER BY da.attempt_id
-				LIMIT ${unknownBudget}
-			`).bind(
-				emailConst.type.SEND,
-				deliveryAttemptConst.status.UNKNOWN,
-				emailConst.status.SAVING,
-				emailConst.status.FAILED
-			).all();
-			unknownAttempts = result.results || [];
-		}
+		const { results: unknownAttempts = [] } = await c.env.db.prepare(`
+			SELECT
+				da.attempt_id AS attemptId,
+				da.email_id AS emailId,
+				da.provider,
+				da.provider_message_id AS providerMessageId,
+				e.status AS emailStatus,
+				e.resend_email_id AS emailProviderMessageId
+			FROM delivery_attempt da
+			JOIN email e ON e.email_id = da.email_id AND e.type = ?
+			WHERE da.status = ?
+			  AND (e.status NOT IN (?, ?) OR e.resend_email_id IS NOT NULL)
+			ORDER BY da.attempt_id
+			LIMIT ${batchLimit}
+		`).bind(
+			emailConst.type.SEND,
+			deliveryAttemptConst.status.UNKNOWN,
+			emailConst.status.SAVING,
+			emailConst.status.FAILED
+		).all();
 
 		for (const attempt of unknownAttempts) {
 			const evidenceMessageId = attempt.providerMessageId || attempt.emailProviderMessageId || null;

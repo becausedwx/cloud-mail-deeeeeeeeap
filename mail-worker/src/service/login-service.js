@@ -28,8 +28,11 @@ const loginService = {
 
 	async register(c, params, oauth = false) {
 
+		// OAuth 绑定注册不过人机验证，且注册失败后 oauth-service 会把绑定令牌放回，
+		// 换个 email 重试几乎零成本。这里按纯 IP 分桶（account 传空串），
+		// 让轮换邮箱无法刷新配额；否则 isRegAccount/isDelUser 就是个不限速的邮箱枚举预言机。
 		const rateIdentity = oauth
-			? null
+			? await authRateLimitService.assertAllowed(c, 'oauth-register', '')
 			: await authRateLimitService.assertAllowed(c, 'register', params?.email);
 
 		try {
@@ -318,12 +321,12 @@ const loginService = {
 
 		const userRow = await userService.selectByEmailIncludeDel(c, email);
 
-		if (!userRow) {
-			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
-			throw new BizError(t('loginFailed'));
-		}
-
-		if(userRow.isDel === isDel.DELETE) {
+		// 这两条不做口令校验就返回，比「密码错误」少一整轮 PBKDF2；
+		// 统一文案挡不住这个时间差，补一次等价开销把耗时抹平
+		if (!userRow || userRow.isDel === isDel.DELETE) {
+			if (!noVerifyPwd) {
+				await cryptoUtils.burnPasswordVerification(password);
+			}
 			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
 			throw new BizError(t('loginFailed'));
 		}

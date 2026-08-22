@@ -315,11 +315,12 @@ describe('email service status synchronization', () => {
 		expect(selectStatement.sql).toContain('LIMIT 2');
 			expect(attService.reconcileReceived).toHaveBeenCalledWith(c, 1);
 			expect(mockState.updates[0]).toEqual({
+				isDel: isDel.NORMAL,
 				status: emailConst.status.FAILED,
 				message: 'ATTACHMENT_RECOVERY_FAILED',
 				recoveryAfter: null
 			});
-			expect(emailSearchService.syncEmailIds).not.toHaveBeenCalled();
+			expect(emailSearchService.syncEmailIds).toHaveBeenCalledWith(c, [1]);
 		});
 
 		it('stores only bounded allowlisted incoming failure codes', async () => {
@@ -328,11 +329,12 @@ describe('email service status synchronization', () => {
 			await emailService.failReceive(c, 55, `provider secret ${'x'.repeat(500)}`);
 
 			expect(mockState.updates[0]).toEqual({
+				isDel: isDel.NORMAL,
 				status: emailConst.status.FAILED,
 				message: 'RECEIVE_FAILED',
 				recoveryAfter: null
 			});
-		expect(emailSearchService.syncEmailIds).not.toHaveBeenCalled();
+		expect(emailSearchService.syncEmailIds).toHaveBeenCalledWith(c, [55]);
 	});
 
 	it('updates AI-extracted codes only while the code field is still empty', async () => {
