@@ -5,6 +5,10 @@ import {loginUserInfo} from "@/request/my.js";
 import {permsToRouter} from "@/perm/perm.js";
 import router from "@/router";
 import {websiteConfig} from "@/request/setting.js";
+// cvtR2Url 必须静态导入：main.js 顶层 await init() 使入口 chunk 停在求值中途，
+// 若此处动态 import convert chunk，而 convert 静态引回入口 chunk（useSettingStore 被打进入口），
+// 会形成「入口等 convert 求值、convert 等入口求值」的 ES 模块死锁，页面永久卡在首屏 loading 且无任何报错
+import {cvtR2Url} from "@/utils/convert.js";
 import i18n, {detectLang, normalizeLang} from "@/i18n/index.js";
 import {
     clearAuthSession,
@@ -100,7 +104,6 @@ export async function init() {
     // API 返回后：若配置的背景与缓存 URL 不同（管理员换图），补一次预取；
     // 相同则前面已发起，无需重复。同时记录最新 URL 供下次回访使用。
     if (setting.background) {
-        const {cvtR2Url} = await import("@/utils/convert.js");
         const src = cvtR2Url(setting.background);
         if (src !== settingStore.lastBackgroundUrl) {
             prefetchLoginBackground(src);
