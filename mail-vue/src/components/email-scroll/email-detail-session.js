@@ -141,10 +141,17 @@ export function createEmailDetailSession({
       if (emailId === null || emailId === undefined) continue
       for (const currentScope of scopes) {
         const key = `${currentContext}:${currentScope}:${String(emailId)}`
-        revisions.set(key, (revisions.get(key) || 0) + 1)
         cache.delete(key)
-        inFlight.get(key)?.controller.abort()
-        inFlight.delete(key)
+        const pending = inFlight.get(key)
+        // revision 只用来作废「本次失效之前就已发出」的请求，没有在途请求就没有作废对象。
+        // 留着它只会让这个 Map 随会话单调增长：refreshList 每次都会给全表 id 各记一笔。
+        if (pending) {
+          revisions.set(key, (revisions.get(key) || 0) + 1)
+          pending.controller.abort()
+          inFlight.delete(key)
+        } else {
+          revisions.delete(key)
+        }
       }
     }
   }
@@ -159,6 +166,7 @@ export function createEmailDetailSession({
       entries: cache.size,
       bytes: cache.totalBytes,
       inFlight: inFlight.size,
+      revisions: revisions.size,
       context: currentContext
     })
   }

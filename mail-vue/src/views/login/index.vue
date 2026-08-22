@@ -85,10 +85,8 @@
                class="register-turnstile"
                :data-sitekey="settingStore.settings.siteKey"
                data-action="register"
-               data-callback="onTurnstileSuccess"
-               data-error-callback="onTurnstileError"
-               data-after-interactive-callback="loadAfter"
-               data-before-interactive-callback="loadBefore"
+               data-callback="onLoginTurnstileSuccess"
+               data-error-callback="onLoginTurnstileError"
           >
             <span style="font-size: 12px;color: #F56C6C" v-if="botJsError">{{ $t('verifyModuleFailed') }}</span>
           </div>
@@ -217,25 +215,23 @@ let turnstileId = null
 let botJsError = ref(false)
 let verifyErrorCount = 0
 
-window.onTurnstileSuccess = (token) => {
-  verifyToken = token;
-};
+let verifyRetryTimer = null
 
-window.onTurnstileError = (e) => {
+// Turnstile 按名字从 window 取回调，所以只能挂全局；但名字必须每个组件独立，
+// 账号面板也有一个 turnstile，共用同一组名字时后挂载的会静默顶掉先挂载的
+function onLoginTurnstileSuccess(token) {
+  verifyToken = token;
+}
+
+function onLoginTurnstileError(e) {
   if (verifyErrorCount >= 4) {
     return
   }
   verifyErrorCount++
   console.warn('人机验加载失败', e)
-  setTimeout(() => {
+  verifyRetryTimer = setTimeout(() => {
     nextTick(renderTurnstile)
   }, 1500)
-};
-
-window.loadAfter = (e) => {
-}
-
-window.loadBefore = (e) => {
 }
 
 async function renderTurnstile() {
@@ -275,6 +271,9 @@ const background = computed(() => {
 })
 
 onMounted(() => {
+  window.onLoginTurnstileSuccess = onLoginTurnstileSuccess
+  window.onLoginTurnstileError = onLoginTurnstileError
+
   stopBackgroundWatch = watch(() => settingStore.settings.background, value => {
     cancelBackgroundLoad()
     loadedBackgroundUrl.value = ''
@@ -307,6 +306,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  delete window.onLoginTurnstileSuccess
+  delete window.onLoginTurnstileError
+  clearTimeout(verifyRetryTimer)
   stopBackgroundWatch()
   cancelBackgroundLoad()
 })

@@ -109,8 +109,8 @@
           :class="verifyShow ? 'turnstile-show' : 'turnstile-hide'"
           :data-sitekey="settingStore.settings.siteKey"
           data-action="add-account"
-          data-callback="onTurnstileSuccess"
-          data-error-callback="onTurnstileError"
+          data-callback="onAccountTurnstileSuccess"
+          data-error-callback="onAccountTurnstileError"
       >
         <span style="font-size: 12px;color: #F56C6C" v-if="botJsError">{{ $t('verifyModuleFailed') }}</span>
       </div>
@@ -128,7 +128,7 @@
 </template>
 <script setup>
 import {Icon} from "@iconify/vue";
-import {computed, nextTick, reactive, ref, watch} from "vue";
+import {computed, nextTick, onMounted, onUnmounted, reactive, ref, watch} from "vue";
 import {
   accountList,
   accountAdd,
@@ -171,6 +171,7 @@ let turnstileId = null
 const botJsError = ref(false)
 let verifyToken = ''
 let verifyErrorCount = 0
+let verifyRetryTimer = null
 let listGeneration = 0
 const addForm = reactive({
   email: '',
@@ -202,20 +203,33 @@ const openSelect = () => {
   mySelect.value.toggleMenu()
 }
 
-window.onTurnstileError = (e) => {
+// Turnstile 按名字从 window 取回调，所以只能挂全局；但名字必须每个组件独立，
+// 登录页也有一个 turnstile，共用同一组名字时后挂载的会静默顶掉先挂载的
+function onAccountTurnstileError(e) {
   if (verifyErrorCount >= 4) {
     return
   }
   verifyErrorCount++
   console.warn('人机验加载失败', e)
-  setTimeout(() => {
+  verifyRetryTimer = setTimeout(() => {
     nextTick(renderTurnstile)
   }, 1500)
-};
+}
 
-window.onTurnstileSuccess = (token) => {
+function onAccountTurnstileSuccess(token) {
   verifyToken = token;
-};
+}
+
+onMounted(() => {
+  window.onAccountTurnstileSuccess = onAccountTurnstileSuccess
+  window.onAccountTurnstileError = onAccountTurnstileError
+})
+
+onUnmounted(() => {
+  delete window.onAccountTurnstileSuccess
+  delete window.onAccountTurnstileError
+  clearTimeout(verifyRetryTimer)
+})
 
 async function renderTurnstile() {
   try {

@@ -185,3 +185,32 @@ test('failed and incomplete detail responses are never cached and can be retried
   }), { emailId: 4, subject: 'complete', attList: [] })
   assert.equal(calls, 3)
 })
+
+// refreshList 每次都会对整张列表调 invalidate，若无在途请求也记一笔 revision，
+// 这个 Map 会随「本会话见过的邮件数」单调增长，直到切账号才清
+test('invalidating idle entries does not accumulate revision bookkeeping', () => {
+  const session = createEmailDetailSession()
+  session.put({ accountId: 1, sessionGeneration: 1, emailId: 1 }, { emailId: 1, attList: [] })
+
+  for (let emailId = 1; emailId <= 500; emailId++) {
+    session.invalidate({ emailIds: [emailId] })
+  }
+
+  assert.equal(session.stats().revisions, 0)
+})
+
+test('a revision is still kept while a request is in flight so its stale result is dropped', async () => {
+  const session = createEmailDetailSession()
+  const pending = deferred()
+  const descriptor = { accountId: 1, sessionGeneration: 1, emailId: 7, scope: 'logic' }
+
+  const stale = session.load({ ...descriptor, load: () => pending.promise })
+  assert.equal(session.stats().inFlight, 1)
+
+  session.invalidate({ emailIds: [7] })
+  assert.equal(session.stats().revisions, 1, 'an in-flight request still needs its revision')
+
+  pending.resolve({ emailId: 7, attList: [] })
+  assert.equal(await stale, null)
+  assert.equal(session.stats().entries, 0, 'the invalidated result must not repopulate the cache')
+})

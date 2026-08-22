@@ -91,3 +91,60 @@ test('deactivation cancels idle and in-flight prefetch without retaining stale d
     cached: 0
   })
 })
+
+function inFlightController() {
+  const idle = idleScheduler()
+  const controller = createPagePrefetchController({
+    scheduleIdle: callback => idle.schedule(callback),
+    cancelIdle: id => idle.cancel(id)
+  })
+  controller.activate()
+
+  const page = {}
+  controller.schedule({
+    key: 'page-2',
+    load: signal => {
+      page.signal = signal
+      return new Promise((resolve, reject) => {
+        page.resolve = resolve
+        page.reject = reject
+      })
+    }
+  })
+  idle.run()
+  return { controller, page }
+}
+
+// 真实故障路径：用户滚到底消费了预取，此时轮询到新邮件走 addItem -> invalidate。
+// 中止（或按 generation 作废）这个请求，调用方就只能拿到 null 并直接 return，
+// 底部骨架永久转圈，这一页也丢了。
+test('invalidate leaves a consumed request alone so the awaiting caller still gets its page', async () => {
+  const { controller, page } = inFlightController()
+
+  const awaited = controller.consume('page-2')
+  controller.invalidate()
+
+  assert.equal(page.signal.aborted, false, 'a request the caller awaits must not be aborted')
+
+  page.resolve({ list: [{ emailId: 2 }] })
+  assert.deepEqual(await awaited, { list: [{ emailId: 2 }] })
+})
+
+test('invalidate does not swallow the failure of a consumed request', async () => {
+  const { controller, page } = inFlightController()
+
+  const awaited = controller.consume('page-2')
+  controller.invalidate()
+
+  page.reject(new Error('page load failed'))
+  await assert.rejects(awaited, /page load failed/)
+})
+
+test('invalidate still aborts a prefetch nobody is waiting for', async () => {
+  const { controller, page } = inFlightController()
+
+  controller.invalidate()
+
+  assert.equal(page.signal.aborted, true)
+  assert.equal(controller.stats().inFlight, 0)
+})

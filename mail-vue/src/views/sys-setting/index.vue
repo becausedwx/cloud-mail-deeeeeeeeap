@@ -1899,7 +1899,9 @@ function editSetting(settingForm, refreshStatus = true) {
   }
 }
 
-.bot-verify {
+// 必须压过 .setting-item > div:last-child 的两列栅格（特异度更高），
+// 否则这里的第三个子元素（删除按钮）会被自动换行挤到第二行
+.setting-item > div:last-child.bot-verify {
   display: flex;
   align-items: center;
   justify-content: flex-end;

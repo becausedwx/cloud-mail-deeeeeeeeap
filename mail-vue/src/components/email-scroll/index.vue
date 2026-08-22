@@ -5,7 +5,6 @@
           v-model="checkAll"
           :indeterminate="isIndeterminate"
           :disabled="!emailList.length || loading"
-          @change="handleCheckAllChange"
       >
       </el-checkbox>
       <div class="header-left" :style="'padding-left:' + actionLeft">
@@ -45,8 +44,10 @@
                         :key="keyCount"
         >
           <template #default="{ data: item, index }" >
-            <div v-memo="[item.checked, item.unread, item.isStar, item.rightChecked, item.statusIcon, item.isDel, showUnread, showStatus, selectedCount === 0]"
-                 :class="'email-row ' + props.type"
+            <!-- 不要在此加 v-memo：插槽不是 v-for，编译出的 _cache 下标是编译期常量，
+                 一次渲染里每行都读写同一个槽；withMemo 只比对依赖数组、不校验 key，
+                 命中就返回同一个 vnode 对象，整段列表会塌成重复行并残留孤儿 DOM -->
+            <div :class="'email-row ' + props.type"
                  :data-checked="item.checked"
                  :data-unread="showUnread && item.unread === EmailUnreadEnum.UNREAD"
                  @click="jumpDetails(item)"
@@ -277,6 +278,8 @@ import {createEmailDetailView} from "@/components/email-scroll/email-detail-view
 import {createPagePrefetchController} from "@/components/email-scroll/page-prefetch.js";
 import {createActiveRuntime} from "@/components/email-scroll/active-runtime.js";
 import {createEmailListScrollbarWatchSource} from "@/components/email-scroll/email-list-scrollbar-source.js";
+import {createSelectionState} from "@/components/email-scroll/selection-state.js";
+import {removeEmailsInPlace} from "@/components/email-scroll/email-list-mutations.js";
 
 const props = defineProps({
   getEmailList: Function,
@@ -330,7 +333,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['jump', 'refresh-before', 'delete-draft', 'right-search'])
-const {t} = useI18n()
+const {t, locale} = useI18n()
 const settingStore = useSettingStore()
 const uiStore = useUiStore();
 const emailStore = useEmailStore();
@@ -342,8 +345,6 @@ const loadError = ref(false);
 const emailList = reactive([])
 const expandList = reactive([])
 const total = ref(0);
-const checkAll = ref(false);
-const isIndeterminate = ref(false);
 const scroll = ref(null)
 const firstLoad = ref(true)
 let scrollTop = 0
@@ -360,9 +361,7 @@ const dropdownRef = ref(null);
 const dropdownCloseLock = ref(false);
 const dropdownShow = ref(false);
 const rightClickEmail = ref({});
-// 勾选状态统一由 computed 派生：模板/逻辑只读，避免每次勾选触发 O(N) 全表扫描
-const selectedCount = computed(() => emailList.filter(item => item.checked).length);
-const selectedIds = computed(() => emailList.filter(item => item.checked).map(item => item.emailId));
+const {selectedCount, selectedIds, checkAll, isIndeterminate} = createSelectionState(emailList);
 const position = ref(
     DOMRect.fromRect({
       x: 0,
@@ -511,13 +510,6 @@ watch(isArriveBottom, (isBottom) => {
   }
 });
 
-watch(selectedCount, () => {
-	if (emailList.length > 0) {
-	  updateCheckStatus();
-	}
-});
-
-
 watch(() => emailStore.deleteIds, () => {
   if (emailStore.deleteIds) {
     deleteEmail(emailStore.deleteIds)
@@ -633,13 +625,11 @@ const handleContextmenu = (event, email) => {
 
 function updateHasScrollbar() {
   nextTick(() => {
-    const doc = document.querySelector('.virtual');
+    // 必须取本实例的滚动容器：keep-alive 下收件箱/已发送/全部邮件等多个列表同时存在，
+    // document.querySelector 只会命中 DOM 里的第一个，实例之间互相串味
+    const doc = scrollbarRef.value?.$el;
     if (doc) {
-      if (doc.scrollHeight > doc.clientHeight) {
-        timePaddingRight.value = '5px';
-      } else {
-        timePaddingRight.value = '15px'
-      }
+      timePaddingRight.value = doc.scrollHeight > doc.clientHeight ? '5px' : '15px';
     }
   })
 }
@@ -825,15 +815,7 @@ function handleDelete() {
 function deleteEmail(emailIds) {
   invalidateEmailDetails({ emailIds })
   pagePrefetch.invalidate()
-  let removed = 0;
-  emailIds.forEach(emailId => {
-    emailList.forEach((item, index) => {
-      if (emailId === item.emailId) {
-        emailList.splice(index, 1);
-        removed++;
-      }
-    })
-  })
+  const removed = removeEmailsInPlace(emailList, emailIds);
   if (removed > 0 && total.value) {
     total.value = Math.max(0, total.value - removed);
   }
@@ -889,11 +871,6 @@ function addItem(email) {
   return true;
 }
 
-function handleCheckAllChange(val) {
-  emailList.forEach(item => item.checked = val);
-  isIndeterminate.value = false;
-}
-
 // 获取选中的邮件列表id（复用 computed，避免重复扫描）
 function getSelectedMailsIds() {
   return selectedIds.value;
@@ -901,11 +878,6 @@ function getSelectedMailsIds() {
 
 function getSelectedDraftsIds() {
   return emailList.filter(item => item.checked).map(item => item.draftId);
-}
-
-function updateCheckStatus() {
-	  checkAll.value = selectedCount.value === emailList.length;
-	  isIndeterminate.value = selectedCount.value > 0 && selectedCount.value < emailList.length;
 }
 
 function jumpDetails(email) {
@@ -981,7 +953,7 @@ function getEmailList(refresh = false) {
 
     handleList(list);
     emailList.push(...list);
-    if (refresh) scrollbarRef.value?.setScrollTop(0);
+    if (refresh) scrollbarRef.value?.scrollTo(0);
 
     noLoading.value = data.hasMore === false || data.list.length < queryParam.size;
     followLoading.value = !noLoading.value;
@@ -1028,8 +1000,9 @@ function scheduleNextPagePrefetch(request) {
   });
 }
 
-// 状态图标表按需构建一次：每封邮件重建 Map + 8 次 t() 是纯浪费；
-// 语言切换时由 keyCount 强刷兜底，无需响应式重建
+// 状态图标表按需构建一次：每封邮件重建 Map + 8 次 t() 是纯浪费。
+// 表内文案与 isDelContent 都是取值时固化的，不会随 t() 重新求值，
+// 所以切换语言必须显式重建（见下方 watch(locale)）
 function buildStatusIconMap() {
   return {
     0: { icon: 'ic:round-mark-email-read', color: '#51C76B', content: t('received') },
@@ -1048,6 +1021,11 @@ function getStatusIconMap() {
   return statusIconMap;
 }
 
+watch(locale, () => {
+  statusIconMap = null;
+  handleList(emailList);
+})
+
 function handleList(list) {
   const icons = getStatusIconMap();
   list.forEach(email => {
@@ -1062,15 +1040,10 @@ function handleList(list) {
 
 function refresh() {
   emit('refresh-before')
-  if (props.skeleton) {
-    scrollbarRef.value.setScrollTop(0)
-  }
   refreshList()
 }
 
 function refreshList() {
-  checkAll.value = false;
-  isIndeterminate.value = false;
   loadError.value = false;
   const canStartImmediately = requestCoordinator.invalidate({queueRefresh: true});
   invalidateEmailDetails({ emailIds: emailList.map(email => email.emailId) })
