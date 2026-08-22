@@ -327,10 +327,10 @@
                 <div><span>Site Key</span></div>
                 <div class="bot-verify">
                   <span>{{ turnstileConfiguredText('siteKey') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="openTurnstileDialog">
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openTurnstileDialog">
                     <Icon icon="lsicon:edit-outline" width="16" height="16"/>
                   </el-button>
-                  <el-button class="opt-button" size="small" type="danger" :disabled="!turnstileHasKey('siteKey')" @click="clearTurnstileKey('siteKey')">
+                  <el-button class="opt-button" size="small" type="danger" plain :disabled="!turnstileHasKey('siteKey')" @click="clearTurnstileKey('siteKey')">
                     <Icon icon="material-symbols:delete-outline" width="16" height="16"/>
                   </el-button>
                 </div>
@@ -339,10 +339,10 @@
                 <div><span>Secret Key</span></div>
                 <div class="bot-verify">
                   <span>{{ turnstileConfiguredText('secretKey') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="openTurnstileDialog">
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openTurnstileDialog">
                     <Icon icon="lsicon:edit-outline" width="16" height="16"/>
                   </el-button>
-                  <el-button class="opt-button" size="small" type="danger" :disabled="!turnstileHasKey('secretKey')" @click="clearTurnstileKey('secretKey')">
+                  <el-button class="opt-button" size="small" type="danger" plain :disabled="!turnstileHasKey('secretKey')" @click="clearTurnstileKey('secretKey')">
                     <Icon icon="material-symbols:delete-outline" width="16" height="16"/>
                   </el-button>
                 </div>
@@ -1900,15 +1900,14 @@ function editSetting(settingForm, refreshStatus = true) {
 }
 
 .bot-verify {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 
   span {
-    display: flex;
-    align-items: center;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -1916,8 +1915,9 @@ function editSetting(settingForm, refreshStatus = true) {
   }
 
   .el-button {
-    width: 48px;
-    margin: 0 0 0 10px;
+    width: 32px;
+    margin: 0;
+    flex-shrink: 0;
   }
 }
 

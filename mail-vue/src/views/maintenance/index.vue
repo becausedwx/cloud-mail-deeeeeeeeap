@@ -49,27 +49,34 @@
         <div class="panel-title">{{ $t('safeRepair') }}</div>
         <div class="panel-desc">{{ $t('safeRepairDesc') }}</div>
         <div v-if="canRepair" class="repair-actions">
-          <el-button type="primary" plain :loading="repairing === 'schema'" @click="repair('schema')">
-            {{ $t('repairSchema') }}
-          </el-button>
-          <el-button type="primary" plain :loading="repairing === 'indexes'" @click="repair('indexes')">
-            {{ $t('repairIndexes') }}
-          </el-button>
-          <el-button type="warning" plain :loading="repairing === 'delivery-reconcile'" @click="repair('delivery-reconcile')">
-            {{ $t('reconcileDelivery') }}
-          </el-button>
-          <el-button type="warning" plain :loading="repairing === 'receive-recover'" @click="repair('receive-recover')">
-            {{ $t('recoverReceive') }}
-          </el-button>
-          <el-button type="danger" plain :loading="repairing === 'delivery-ack-unknown'" @click="repair('delivery-ack-unknown')">
-            {{ $t('ackUnknownDelivery') }}
-          </el-button>
-          <el-button type="danger" plain :loading="repairing === 'delivery-fail-unknown'" @click="repair('delivery-fail-unknown')">
-            {{ $t('failUnknownDelivery') }}
-          </el-button>
-          <el-button type="warning" plain :loading="repairing === 'search'" @click="repair('search')">
-            {{ $t('rebuildSearch') }}
-          </el-button>
+          <button class="repair-btn is-safe" :disabled="repairing === 'schema'" @click="repair('schema')">
+            <Icon icon="fluent:wrench-20-regular" width="15" height="15"/>
+            <span>{{ $t('repairSchema') }}</span>
+          </button>
+          <button class="repair-btn is-safe" :disabled="repairing === 'indexes'" @click="repair('indexes')">
+            <Icon icon="fluent:wrench-20-regular" width="15" height="15"/>
+            <span>{{ $t('repairIndexes') }}</span>
+          </button>
+          <button class="repair-btn is-caution" :disabled="repairing === 'delivery-reconcile'" @click="repair('delivery-reconcile')">
+            <Icon icon="fluent:arrow-reset-20-regular" width="15" height="15"/>
+            <span>{{ $t('reconcileDelivery') }}</span>
+          </button>
+          <button class="repair-btn is-caution" :disabled="repairing === 'receive-recover'" @click="repair('receive-recover')">
+            <Icon icon="fluent:arrow-download-20-regular" width="15" height="15"/>
+            <span>{{ $t('recoverReceive') }}</span>
+          </button>
+          <button class="repair-btn is-risky" :disabled="repairing === 'delivery-ack-unknown'" @click="repair('delivery-ack-unknown')">
+            <Icon icon="fluent:checkmark-circle-20-regular" width="15" height="15"/>
+            <span>{{ $t('ackUnknownDelivery') }}</span>
+          </button>
+          <button class="repair-btn is-risky" :disabled="repairing === 'delivery-fail-unknown'" @click="repair('delivery-fail-unknown')">
+            <Icon icon="fluent:dismiss-circle-20-regular" width="15" height="15"/>
+            <span>{{ $t('failUnknownDelivery') }}</span>
+          </button>
+          <button class="repair-btn is-caution" :disabled="repairing === 'search'" @click="repair('search')">
+            <Icon icon="fluent:search-sparkle-20-regular" width="15" height="15"/>
+            <span>{{ $t('rebuildSearch') }}</span>
+          </button>
         </div>
         <el-empty v-else :description="$t('unauthorized')" :image-size="80"/>
       </div>
@@ -78,15 +85,18 @@
         <div class="panel-title">{{ $t('codeMaintenance') }}</div>
         <div class="panel-desc">{{ $t('codeMaintenanceDesc') }}</div>
         <div v-if="canRepair" class="repair-actions">
-          <el-button type="primary" plain :loading="repairing === 'codes-rescan'" @click="repair('codes-rescan')">
-            {{ $t('rescanCodes') }}
-          </el-button>
-          <el-button type="warning" plain :loading="repairing === 'codes-clean'" @click="repair('codes-clean')">
-            {{ $t('cleanFalseCodes') }}
-          </el-button>
-          <el-button type="danger" plain :loading="repairing === 'codes-clear-stale'" @click="repair('codes-clear-stale')">
-            {{ $t('clearStaleCodes') }}
-          </el-button>
+          <button class="repair-btn is-safe" :disabled="repairing === 'codes-rescan'" @click="repair('codes-rescan')">
+            <Icon icon="fluent:scan-dash-20-regular" width="15" height="15"/>
+            <span>{{ $t('rescanCodes') }}</span>
+          </button>
+          <button class="repair-btn is-caution" :disabled="repairing === 'codes-clean'" @click="repair('codes-clean')">
+            <Icon icon="fluent:paint-brush-20-regular" width="15" height="15"/>
+            <span>{{ $t('cleanFalseCodes') }}</span>
+          </button>
+          <button class="repair-btn is-risky" :disabled="repairing === 'codes-clear-stale'" @click="repair('codes-clear-stale')">
+            <Icon icon="fluent:delete-20-regular" width="15" height="15"/>
+            <span>{{ $t('clearStaleCodes') }}</span>
+          </button>
         </div>
         <el-empty v-else :description="$t('unauthorized')" :image-size="80"/>
         <div v-if="health.lastAction" class="action-result">
@@ -357,15 +367,86 @@ refresh()
 }
 
 .repair-actions {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, max-content));
-  gap: 12px 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   align-items: center;
+}
 
-  :deep(.el-button) {
-    width: 150px;
-    min-width: 150px;
-    margin-left: 0;
+.repair-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--el-bg-color);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow:
+    0 0 0 1px oklch(0 0 0 / 0.06),
+    0 1px 2px -1px oklch(0 0 0 / 0.06),
+    0 2px 4px 0 oklch(0 0 0 / 0.04);
+  transition-property: scale, box-shadow, background-color, color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+
+  svg {
+    flex-shrink: 0;
+    opacity: 0.75;
+  }
+
+  &:hover:not(:disabled) {
+    box-shadow:
+      0 0 0 1px oklch(0 0 0 / 0.08),
+      0 1px 2px -1px oklch(0 0 0 / 0.08),
+      0 2px 4px 0 oklch(0 0 0 / 0.06);
+    background: var(--el-fill-color-light);
+  }
+
+  &:active:not(:disabled) {
+    scale: 0.96;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+}
+
+html.dark .repair-btn {
+  box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08);
+
+  &:hover:not(:disabled) {
+    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.13);
+    background: var(--el-fill-color-light);
+  }
+}
+
+.is-safe {
+  color: var(--el-color-primary);
+
+  &:hover:not(:disabled) {
+    background: var(--el-color-primary-light-9);
+  }
+}
+
+.is-caution {
+  color: var(--el-color-warning-dark-2);
+
+  &:hover:not(:disabled) {
+    background: var(--el-color-warning-light-9);
+  }
+}
+
+.is-risky {
+  color: var(--el-color-error);
+
+  &:hover:not(:disabled) {
+    background: var(--el-color-error-light-9);
   }
 }
 
@@ -433,12 +514,10 @@ refresh()
   }
 
   .repair-actions {
-    grid-template-columns: 1fr;
-    gap: 10px;
+    gap: 8px;
 
-    :deep(.el-button) {
-      width: 100%;
-      min-width: 0;
+    .repair-btn {
+      flex: 1 1 100%;
     }
   }
 }
