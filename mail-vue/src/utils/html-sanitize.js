@@ -11,6 +11,9 @@ const URL_ATTRS = new Set([
 ]);
 // srcset 语法特殊：逗号分隔的多个候选，每段首 token 是 URL
 const SRCSET_ATTRS = new Set(['srcset', 'imagesrcset']);
+// 正文脱离文档流后能覆盖到 shadow host 之外（host 未建立包含块，overflow 也拦不住 fixed），
+// 发件人可用整屏浮层伪造登录框钓密码；static/relative 仍受容器约束，放行
+const SAFE_POSITION_VALUES = new Set(['static', 'relative', 'initial', 'inherit', 'unset', 'revert']);
 
 export function sanitizeHtml(html = '') {
   const template = document.createElement('template');
@@ -33,7 +36,24 @@ export function sanitizeStyleAttribute(style = '') {
       .filter(item => !/image-set\s*\(/i.test(item))
       .filter(item => !/-moz-binding/i.test(item))
       .filter(item => !/behavior\s*:/i.test(item))
+      .filter(item => !isEscapingPosition(item))
       .join('; ');
+}
+
+function isEscapingPosition(declaration) {
+  const separator = declaration.indexOf(':');
+  if (separator < 0) {
+    return false;
+  }
+  if (declaration.slice(0, separator).trim().toLowerCase() !== 'position') {
+    return false;
+  }
+  const value = declaration
+      .slice(separator + 1)
+      .replace(/!\s*important\s*$/i, '')
+      .trim()
+      .toLowerCase();
+  return !SAFE_POSITION_VALUES.has(value);
 }
 
 function sanitizeNode(root) {

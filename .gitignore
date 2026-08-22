@@ -26,3 +26,7 @@ mail-vue/dist
 .wrangler
 .venv
 backups/
+.scratch/
+output/
+/C
+/C.bak

@@ -667,12 +667,13 @@ function htmlToText(email) {
 
     const tempDiv = document.createElement('div');
 
-    tempDiv.innerHTML = sanitizeHtml(email.content).replace(
-        /<(img|iframe|object|embed|video|audio|source|link)[^>]*>/gi, ''
-    );
+    tempDiv.innerHTML = sanitizeHtml(email.content);
 
-    const scriptsAndStyles = tempDiv.querySelectorAll('script, style, title');
-    scriptsAndStyles.forEach(el => el.remove());
+    // 列表仅取纯文本，但节点一旦挂进 document 就会拉取远端资源；
+    // 未打开邮件就回传「已读」给发件人，所以先删掉所有会发请求的元素
+    tempDiv
+        .querySelectorAll('img, iframe, object, embed, video, audio, source, link, input, script, style, title')
+        .forEach(el => el.remove());
     let text = tempDiv.textContent || tempDiv.innerText || '';
     text = text.replace(/\s+/g, ' ').trim();
     return cleanSpace(text)
@@ -851,7 +852,7 @@ function addItem(email) {
   }
 
   email.formatText = htmlToText(email);
-  email.formatCreateTime = fromNow(email.formatCreateTime);
+  email.formatCreateTime = fromNow(email.createTime);
 
   if (props.timeSort) {
     if (noLoading.value) {
