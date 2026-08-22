@@ -1,5 +1,6 @@
 import BizError from '../error/biz-error';
 import settingService from './setting-service';
+import { markAuthAbuse } from './auth-rate-limit-service';
 import { t } from '../i18n/i18n'
 
 export const TURNSTILE_TOKEN_MAX_LENGTH = 2048;
@@ -83,16 +84,18 @@ const turnstileService = {
 			throw new BizError(TURNSTILE_UNAVAILABLE_MESSAGE, 503);
 		}
 
+		// 被 Cloudflare 判定失败、动作不符或来源域不符，都是自动化提交的信号，需计入失败次数；
+		// 上面的 503 与空 token 属于服务不可用和参数校验，不计数
 		if (!result.success) {
 			console.warn('Turnstile verification rejected', {
 				category: 'rejected',
 				errorCodes: normalizeErrorCodes(result['error-codes'])
 			});
-			throw new BizError(t('botVerifyFail'),400)
+			throw markAuthAbuse(new BizError(t('botVerifyFail'),400))
 		}
 
 		if (result.action !== expectedAction) {
-			throw new BizError(t('botVerifyFail'),400)
+			throw markAuthAbuse(new BizError(t('botVerifyFail'),400))
 		}
 
 		const allowedHostnames = new Set([
@@ -100,7 +103,7 @@ const turnstileService = {
 			normalizeHostname(settingRow.customDomain)
 		].filter(Boolean));
 		if (!allowedHostnames.has(normalizeHostname(result.hostname))) {
-			throw new BizError(t('botVerifyFail'),400)
+			throw markAuthAbuse(new BizError(t('botVerifyFail'),400))
 		}
 	}
 };

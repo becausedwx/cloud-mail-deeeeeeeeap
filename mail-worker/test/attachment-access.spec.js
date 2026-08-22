@@ -762,8 +762,9 @@ describe('attachment access control', () => {
 			contentDisposition: 'inline',
 			cacheControl: 'max-age=259200'
 		});
+		// 并行写对象后一次批量置 READY：insert -> put/put(并行) -> update
 		expect(recorder.operationLog.map(operation => operation.type))
-			.toEqual(['insert', 'put', 'update', 'put', 'update']);
+			.toEqual(['insert', 'put', 'put', 'update']);
 		expect(recorder.operationLog[0].bindings).toContain(attConst.type.EMBED);
 	});
 
@@ -810,7 +811,7 @@ describe('attachment access control', () => {
 		expect(recorder.operationLog[1].bindings.join(' ')).not.toContain('provider secret');
 	});
 
-	it('marks unattempted received attachments failed when an upload batch aborts', async () => {
+	it('marks all received attachments failed when any parallel upload aborts', async () => {
 		const recorder = createInsertDbStub();
 		r2Service.putObj
 			.mockImplementationOnce(async (...args) => {
@@ -848,12 +849,17 @@ describe('attachment access control', () => {
 			}
 		])).rejects.toThrow('Attachment object storage failed');
 
-		expect(r2Service.putObj).toHaveBeenCalledTimes(2);
+		// 三段式并行写：3 个对象都会被尝试（不再有"未尝试项"）
+		expect(r2Service.putObj).toHaveBeenCalledTimes(3);
 		expect(recorder.operationLog.some(operation => (
 			operation.type === 'update'
 			&& operation.bindings.includes(attConst.status.FAILED)
-			&& operation.bindings.includes('BATCH_ABORTED')
+			&& operation.bindings.includes('OBJECT_WRITE_FAILED')
 			&& operation.bindings.includes(attConst.status.PENDING)
+		))).toBe(true);
+		expect(recorder.operationLog.some(operation => (
+			operation.type === 'update'
+			&& operation.bindings.includes('BATCH_ABORTED')
 		))).toBe(true);
 	});
 

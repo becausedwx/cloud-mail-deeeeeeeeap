@@ -121,6 +121,9 @@
 | `domain` / `DOMAIN` | ✅ | 邮箱域名 JSON 数组，例如 `["example.com"]` |
 | `admin` / `ADMIN` | ✅ | 管理员邮箱 |
 | `jwt_secret` / `JWT_SECRET` | ✅ | 登录 token 密钥，建议随机 UUID 或更长随机串 |
+| `init_secret` | 推荐 | `/api/init` 初始化接口独立密钥；未配置时回退使用 `jwt_secret` |
+| `oauth_auto_register` | 可选 | 填 `true` 时 LinuxDo OAuth 新用户可绕过站点注册开关自动注册（旧行为）；默认尊重注册开关 |
+| `project_link` / `PROJECT_LINK` | 可选 | 登录页 GitHub 角标指向的地址；未配置指向官方仓库，填 `false` 隐藏角标，非 `http(s)` 的值同样隐藏 |
 | `D1_DATABASE_NAME` | ✅ | D1 数据库名，默认 `mail` |
 | `D1_DATABASE_ID` | ✅ | D1 数据库 ID |
 | `KV_NAMESPACE_ID` | ✅ | KV Namespace ID |

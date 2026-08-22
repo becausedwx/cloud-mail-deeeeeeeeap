@@ -541,4 +541,150 @@ describe('delivery attempt service', () => {
 			'update_time'
 		]));
 	});
+
+	it('auto-resolves an UNKNOWN attempt to ACCEPTED when the email already shows webhook evidence', async () => {
+		await env.db.prepare(`
+			INSERT INTO email (email_id, type, status, resend_email_id)
+			VALUES (61, ?, ?, 'resend-61')
+		`).bind(emailConst.type.SEND, emailConst.status.SENT).run();
+		const attempt = await deliveryAttemptService.prepare({ env }, {
+			emailId: 61,
+			provider: deliveryAttemptConst.provider.RESEND,
+			attemptKey: 'cloud-mail/61/unknown-evidence'
+		});
+		await deliveryAttemptService.markInFlight({ env }, attempt.attemptId);
+		await deliveryAttemptService.markUnknown({ env }, attempt.attemptId);
+
+		const result = await deliveryAttemptService.reconcile({ env });
+
+		const storedAttempt = await env.db.prepare(`
+			SELECT status, provider_message_id AS providerMessageId, error_summary AS errorSummary
+			FROM delivery_attempt WHERE attempt_id = ?
+		`).bind(attempt.attemptId).first();
+		expect(storedAttempt).toEqual({
+			status: deliveryAttemptConst.status.ACCEPTED,
+			providerMessageId: 'resend-61',
+			errorSummary: null
+		});
+		expect(result).toMatchObject({ scanned: 1, repaired: 1, unknown: 0, failed: 0 });
+	});
+
+	it('keeps an UNKNOWN attempt untouched when there is no webhook evidence', async () => {
+		await env.db.prepare(`
+			INSERT INTO email (email_id, type, status)
+			VALUES (62, ?, ?)
+		`).bind(emailConst.type.SEND, emailConst.status.SAVING).run();
+		const attempt = await deliveryAttemptService.prepare({ env }, {
+			emailId: 62,
+			provider: deliveryAttemptConst.provider.RESEND,
+			attemptKey: 'cloud-mail/62/unknown-no-evidence'
+		});
+		await deliveryAttemptService.markInFlight({ env }, attempt.attemptId);
+		await deliveryAttemptService.markUnknown({ env }, attempt.attemptId);
+
+		const result = await deliveryAttemptService.reconcile({ env });
+
+		const storedAttempt = await env.db.prepare(`
+			SELECT status FROM delivery_attempt WHERE attempt_id = ?
+		`).bind(attempt.attemptId).first();
+		const storedEmail = await env.db.prepare(`
+			SELECT status FROM email WHERE email_id = 62
+		`).first();
+		expect(storedAttempt).toEqual({ status: deliveryAttemptConst.status.UNKNOWN });
+		expect(storedEmail).toEqual({ status: emailConst.status.SAVING });
+		expect(result).toMatchObject({ scanned: 0, repaired: 0 });
+	});
+
+	it('manually resolves UNKNOWN attempts to ACCEPTED and promotes the stuck emails', async () => {
+		await env.db.prepare(`
+			INSERT INTO email (email_id, type, status) VALUES (63, ?, ?)
+		`).bind(emailConst.type.SEND, emailConst.status.SAVING).run();
+		await env.db.prepare(`
+			INSERT INTO email (email_id, type, status, resend_email_id) VALUES (64, ?, ?, 'resend-64-existing')
+		`).bind(emailConst.type.SEND, emailConst.status.SAVING).run();
+		const resendAttempt = await deliveryAttemptService.prepare({ env }, {
+			emailId: 63,
+			provider: deliveryAttemptConst.provider.RESEND,
+			attemptKey: 'cloud-mail/63/manual-ack'
+		});
+		await deliveryAttemptService.markInFlight({ env }, resendAttempt.attemptId);
+		await deliveryAttemptService.markUnknown({ env }, resendAttempt.attemptId);
+		await env.db.prepare(`
+			UPDATE delivery_attempt SET provider_message_id = 'resend-63' WHERE attempt_id = ?
+		`).bind(resendAttempt.attemptId).run();
+		const cfAttempt = await deliveryAttemptService.prepare({ env }, {
+			emailId: 64,
+			provider: deliveryAttemptConst.provider.CLOUDFLARE_EMAIL,
+			attemptKey: 'cloud-mail/64/manual-ack'
+		});
+		await deliveryAttemptService.markInFlight({ env }, cfAttempt.attemptId);
+		await deliveryAttemptService.markUnknown({ env }, cfAttempt.attemptId);
+
+		const result = await deliveryAttemptService.resolveUnknown({ env }, { outcome: 'accepted' });
+
+		expect(result).toEqual({ outcome: 'accepted', scanned: 2, resolved: 2 });
+		const storedResendEmail = await env.db.prepare(`
+			SELECT status, resend_email_id AS resendEmailId, message FROM email WHERE email_id = 63
+		`).first();
+		const storedCfEmail = await env.db.prepare(`
+			SELECT status, resend_email_id AS resendEmailId, message FROM email WHERE email_id = 64
+		`).first();
+		expect(storedResendEmail).toEqual({
+			status: emailConst.status.SENT,
+			resendEmailId: 'resend-63',
+			message: 'MANUALLY_MARKED_ACCEPTED'
+		});
+		// attempt 无 provider message id 时保留邮件上既有的 id，webhook 后续仍可匹配
+		expect(storedCfEmail).toEqual({
+			status: emailConst.status.DELIVERED,
+			resendEmailId: 'resend-64-existing',
+			message: 'MANUALLY_MARKED_ACCEPTED'
+		});
+		const attemptRows = await env.db.prepare(`
+			SELECT status, error_summary AS errorSummary FROM delivery_attempt ORDER BY attempt_id
+		`).all();
+		expect(attemptRows.results).toEqual([
+			{ status: deliveryAttemptConst.status.ACCEPTED, errorSummary: 'MANUALLY_MARKED_ACCEPTED' },
+			{ status: deliveryAttemptConst.status.ACCEPTED, errorSummary: 'MANUALLY_MARKED_ACCEPTED' }
+		]);
+
+		const secondRun = await deliveryAttemptService.resolveUnknown({ env }, { outcome: 'accepted' });
+		expect(secondRun).toEqual({ outcome: 'accepted', scanned: 0, resolved: 0 });
+	});
+
+	it('manually resolves UNKNOWN attempts to FAILED so the sender can retry', async () => {
+		await env.db.prepare(`
+			INSERT INTO email (email_id, type, status) VALUES (65, ?, ?)
+		`).bind(emailConst.type.SEND, emailConst.status.SAVING).run();
+		const attempt = await deliveryAttemptService.prepare({ env }, {
+			emailId: 65,
+			provider: deliveryAttemptConst.provider.RESEND,
+			attemptKey: 'cloud-mail/65/manual-fail'
+		});
+		await deliveryAttemptService.markInFlight({ env }, attempt.attemptId);
+		await deliveryAttemptService.markUnknown({ env }, attempt.attemptId);
+
+		const result = await deliveryAttemptService.resolveUnknown({ env }, { outcome: 'failed' });
+
+		expect(result).toEqual({ outcome: 'failed', scanned: 1, resolved: 1 });
+		const storedAttempt = await env.db.prepare(`
+			SELECT status, error_summary AS errorSummary FROM delivery_attempt WHERE attempt_id = ?
+		`).bind(attempt.attemptId).first();
+		const storedEmail = await env.db.prepare(`
+			SELECT status, message FROM email WHERE email_id = 65
+		`).first();
+		expect(storedAttempt).toEqual({
+			status: deliveryAttemptConst.status.FAILED,
+			errorSummary: 'MANUALLY_MARKED_FAILED'
+		});
+		expect(storedEmail).toEqual({
+			status: emailConst.status.FAILED,
+			message: 'DELIVERY_MANUALLY_MARKED_FAILED'
+		});
+	});
+
+	it('rejects an invalid manual outcome for unknown deliveries', async () => {
+		await expect(deliveryAttemptService.resolveUnknown({ env }, { outcome: 'retry' }))
+			.rejects.toMatchObject({ code: 400 });
+	});
 });

@@ -7,6 +7,7 @@ import { and, asc, count, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { emailConst, isDel, roleConst, userConst } from '../const/entity-const';
 import kvConst from '../const/kv-const';
 import KvConst from '../const/kv-const';
+import authInfoCache from '../security/auth-info-cache';
 import cryptoUtils from '../utils/crypto-utils';
 import emailService from './email-service';
 import dayjs from 'dayjs';
@@ -97,7 +98,7 @@ const userService = {
 		}
 
 		try {
-			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
+			await authInfoCache.remove(c, userId);
 		} catch (e) {
 			let rolledBack = false;
 			try {
@@ -191,7 +192,7 @@ const userService = {
 			throw new BizError('The current administrator account cannot be deleted', 403);
 		}
 		await orm(c).update(user).set({ isDel: isDel.DELETE }).where(eq(user.userId, userId)).run();
-		await c.env.kv.delete(kvConst.AUTH_INFO + userId)
+		await authInfoCache.remove(c, userId);
 	},
 
 	async physicsDelete(c, params) {
@@ -204,7 +205,7 @@ const userService = {
 			}
 		}
 		for (const chunk of chunkArray(userIds, 20)) {
-			await Promise.all(chunk.map(userId => c.env.kv.delete(kvConst.AUTH_INFO + userId)));
+			await Promise.all(chunk.map(userId => authInfoCache.remove(c, userId)));
 		}
 		await accountService.physicsDeleteByUserIds(c, userIds);
 		await oauthService.deleteByUserIds(c, userIds);
@@ -271,23 +272,28 @@ const userService = {
 
 		const types = [...new Set(list.map(user => user.type))];
 
-		const [emailCounts, delEmailCounts, sendCounts, delSendCounts, accountCounts, delAccountCounts, roleList] = await Promise.all([
-			emailService.selectUserEmailCountList(c, userIds, emailConst.type.RECEIVE),
-			emailService.selectUserEmailCountList(c, userIds, emailConst.type.RECEIVE, isDel.DELETE),
-			emailService.selectUserEmailCountList(c, userIds, emailConst.type.SEND),
-			emailService.selectUserEmailCountList(c, userIds, emailConst.type.SEND, isDel.DELETE),
-			accountService.selectUserAccountCountList(c, userIds),
-			accountService.selectUserAccountCountList(c, userIds, isDel.DELETE),
+		// 统计合并：4 条邮件计数 + 2 条邮箱计数 -> 2 条 GROUP BY，配合角色查询共 3 次往返（原 7 次）
+		const [emailStatRows, accountStatRows, roleList] = await Promise.all([
+			emailService.selectUserEmailStatList(c, userIds),
+			accountService.selectUserAccountStatList(c, userIds),
 			roleService.selectByIdsHasPermKey(c, types,'email:send')
 		]);
 
-		const receiveMap = Object.fromEntries(emailCounts.map(item => [item.userId, item.count]));
-		const sendMap = Object.fromEntries(sendCounts.map(item => [item.userId, item.count]));
-		const accountMap = Object.fromEntries(accountCounts.map(item => [item.userId, item.count]));
-
-		const delReceiveMap = Object.fromEntries(delEmailCounts.map(item => [item.userId, item.count]));
-		const delSendMap = Object.fromEntries(delSendCounts.map(item => [item.userId, item.count]));
-		const delAccountMap = Object.fromEntries(delAccountCounts.map(item => [item.userId, item.count]));
+		const receiveMap = {};
+		const sendMap = {};
+		const accountMap = {};
+		const delReceiveMap = {};
+		const delSendMap = {};
+		const delAccountMap = {};
+		for (const row of emailStatRows) {
+			const target = row.isDel === isDel.DELETE
+				? (row.type === emailConst.type.RECEIVE ? delReceiveMap : delSendMap)
+				: (row.type === emailConst.type.RECEIVE ? receiveMap : sendMap);
+			target[row.userId] = row.count;
+		}
+		for (const row of accountStatRows) {
+			(row.isDel === isDel.DELETE ? delAccountMap : accountMap)[row.userId] = row.count;
+		}
 
 		for (const user of list) {
 
@@ -360,7 +366,7 @@ const userService = {
 
 		const { password, userId } = params;
 		await replacePassword(c, password, userId);
-		await c.env.kv.delete(KvConst.AUTH_INFO + userId);
+		await authInfoCache.remove(c, userId);
 	},
 
 	async setStatus(c, params) {
@@ -380,7 +386,7 @@ const userService = {
 			.run();
 
 		if (status === userConst.status.BAN) {
-			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
+			await authInfoCache.remove(c, userId);
 		}
 	},
 

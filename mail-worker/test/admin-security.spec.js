@@ -311,7 +311,7 @@ describe('administrator security boundaries', () => {
 		});
 
 		expect(response.status).toBe(401);
-		expect(await response.text()).toBe('JWT secret mismatch');
+		expect(await response.text()).toBe('Init secret mismatch');
 		expect(await env.db.prepare(`
 			SELECT COUNT(*) AS count
 			FROM user

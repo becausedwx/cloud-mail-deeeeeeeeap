@@ -15,6 +15,8 @@ import { chunkArray } from '../utils/sql-utils';
 const NOT_FOUND_MESSAGE = 'Attachment not found';
 // Leaves headroom below the Workers Free 50 external-subrequest limit when S3 is used.
 const RECEIVE_RECOVERY_ATTACHMENT_LIMIT = 10;
+// D1 每条语句最多 100 个绑定参数；attachments 表 16 列，5 行/块 = 至多 80 个绑定。
+const ATT_INSERT_CHUNK_ROWS = 5;
 
 function normalizeAttId(attId) {
 	const id = Number(attId);
@@ -123,10 +125,58 @@ async function failPendingAttachmentRows(c, attachments, message = 'BATCH_ABORTE
 	}
 }
 
+// 批量把指定 key 的 PENDING 行置 FAILED；emailId 分组后一条语句处理同邮件多 key
+async function failAttachmentKeys(c, attachments, failedKeys) {
+	const keyList = [...new Set(failedKeys)];
+	const keyPlaceholders = keyList.map(() => '?').join(',');
+	const emailIds = [...new Set(attachments
+		.filter(item => keyList.includes(item.key))
+		.map(item => item.emailId))];
+
+	for (const emailId of emailIds) {
+		await c.env.db.prepare(`
+			UPDATE attachments
+			SET status = ?, message = ?
+			WHERE email_id = ? AND key IN (${keyPlaceholders}) AND status = ?
+		`).bind(
+			attConst.status.FAILED,
+			'OBJECT_WRITE_FAILED',
+			emailId,
+			...keyList,
+			attConst.status.PENDING
+		).run();
+	}
+
+	// 其余仍处 PENDING 的行也一并标失败，保持原有整批失败语义
+	await failPendingAttachmentRows(c, attachments);
+}
+
+// 批量把全部 PENDING 行按 key 置 READY；emailId 去重分组（含 undefined 组），一次语句完成
+async function markAttachmentKeysReady(c, attachments, keys) {
+	if (keys.length === 0) {
+		return;
+	}
+	const keyPlaceholders = keys.map(() => '?').join(',');
+	const emailIds = [...new Set(attachments.map(item => item.emailId))];
+
+	for (const emailId of emailIds) {
+		const result = await c.env.db.prepare(`
+			UPDATE attachments
+			SET status = ?, message = NULL
+			WHERE email_id = ? AND key IN (${keyPlaceholders}) AND status = ?
+		`).bind(attConst.status.READY, emailId, ...keys, attConst.status.PENDING).run();
+		const changes = Number(result?.meta?.changes);
+		if (Number.isFinite(changes) && changes === 0) {
+			throw new Error('Attachment status transition did not update any rows');
+		}
+	}
+}
 const attService = {
 
 	async addAtt(c, attachments) {
-		const writtenKeys = new Set();
+
+		// 三段式：批量插行(状态 PENDING) -> 并行写对象 -> 一条 WHERE key IN 批量置 READY。
+		// N 个附件从 2N 次串行往返降为 1 轮并行写 + 1 次批量状态更新
 		const attachmentRows = attachments.map(attachment => ({
 			...attachment,
 			status: attConst.status.PENDING,
@@ -134,57 +184,51 @@ const attService = {
 				? attConst.type.EMBED
 				: attConst.type.ATT
 		}));
-		await orm(c).insert(att).values(attachmentRows).run();
+		for (const rowChunk of chunkArray(attachmentRows, ATT_INSERT_CHUNK_ROWS)) {
+			await orm(c).insert(att).values(rowChunk).run();
+		}
 
-		for (let attachment of attachments) {
-			if (writtenKeys.has(attachment.key)) {
-				continue;
+		// 去重后并行写对象；任一失败则整批标 FAILED 并抛错（父邮件仍隐藏，行可被恢复任务处理）
+		const uniqueAttachments = [];
+		const seenKeys = new Set();
+		for (const attachment of attachments) {
+			if (!seenKeys.has(attachment.key)) {
+				seenKeys.add(attachment.key);
+				uniqueAttachments.push(attachment);
 			}
+		}
 
+		const writeResults = await Promise.allSettled(uniqueAttachments.map(async attachment => {
 			const metadata = {
 				contentType: attachmentMimeType(attachment)
-			}
-
+			};
 			if (attachment.contentId) {
 				metadata.contentDisposition = 'inline';
-				metadata.cacheControl = `max-age=259200`
+				metadata.cacheControl = `max-age=259200`;
 			}
+			await r2Service.putObj(c, attachment.key, attachment.content, metadata);
+		}));
 
-			try {
-				await r2Service.putObj(c, attachment.key, attachment.content, metadata);
-			} catch (e) {
-				try {
-					await updateAttachmentKeyStatus(
-						c,
-						attachments,
-						attachment.key,
-						attConst.status.FAILED,
-						'OBJECT_WRITE_FAILED'
-					);
-				} catch {
-					// Leave PENDING rows for the recovery job when D1 is unavailable.
-				}
-				try {
-					await failPendingAttachmentRows(c, attachments);
-				} catch {
-					// D1 is unavailable; the hidden parent email keeps these rows inaccessible.
-				}
-				throw attachmentStorageError('Attachment object storage failed');
-			}
-			writtenKeys.add(attachment.key);
+		const failedKeys = writeResults
+			.map((result, index) => result.status === 'rejected' ? uniqueAttachments[index].key : null)
+			.filter(Boolean);
 
+		if (failedKeys.length > 0) {
 			try {
-				await updateAttachmentKeyStatus(
-					c,
-					attachments,
-					attachment.key,
-					attConst.status.READY
-				);
+				await failAttachmentKeys(c, attachments, failedKeys);
 			} catch {
-				throw attachmentStorageError('Attachment state update failed', true);
+				// Leave PENDING rows for the recovery job when D1 is unavailable.
 			}
-
+			throw attachmentStorageError('Attachment object storage failed');
 		}
+
+		// 全部对象写入成功：一次批量置 READY
+		try {
+			await markAttachmentKeysReady(c, attachments, [...seenKeys]);
+		} catch {
+			throw attachmentStorageError('Attachment state update failed', true);
+		}
+
 	},
 
 	list(c, params, userId) {
@@ -559,7 +603,9 @@ const attService = {
 			attDataList.push(attData);
 		}
 
-		await orm(c).insert(att).values(attDataList).run();
+		for (const rowChunk of chunkArray(attDataList, ATT_INSERT_CHUNK_ROWS)) {
+			await orm(c).insert(att).values(rowChunk).run();
+		}
 
 		try {
 			for (const att of objectByKey.values()) {
@@ -617,7 +663,9 @@ const attService = {
 			}
 		}
 
-		await orm(c).insert(att).values(attDataList).run();
+		for (const rowChunk of chunkArray(attDataList, ATT_INSERT_CHUNK_ROWS)) {
+			await orm(c).insert(att).values(rowChunk).run();
+		}
 
 		try {
 			for (const attData of objectByKey.values()) {

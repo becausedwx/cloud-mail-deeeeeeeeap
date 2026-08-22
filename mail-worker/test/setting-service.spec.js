@@ -176,4 +176,46 @@ describe('setting service', () => {
 		expect(result.secretKey).toBeNull();
 		expect(JSON.stringify(result)).not.toContain('0x4AAAA_SECRET');
 	});
+
+	it('exposes the project link as a URL and only disables it for false or non-http values', async () => {
+		const { default: settingService } = await import('../src/service/setting-service');
+		const { default: constant } = await import('../src/const/constant');
+		const expected = [
+			[undefined, constant.DEFAULT_PROJECT_LINK],
+			['', constant.DEFAULT_PROJECT_LINK],
+			['true', constant.DEFAULT_PROJECT_LINK],
+			['false', false],
+			[false, false],
+			['https://github.com/example/fork', 'https://github.com/example/fork'],
+			['  https://example.com/repo  ', 'https://example.com/repo'],
+			['javascript:alert(1)', false],
+			['/relative/path', false]
+		];
+
+		const actual = [];
+		for (const [projectLink] of expected) {
+			const c = {
+				env: {
+					domain: '["589497.xyz"]',
+					project_link: projectLink,
+					kv: {
+						get: vi.fn(async () => ({
+							title: 'Cloud Mail',
+							resendTokens: '{}',
+							emailPrefixFilter: '',
+							loginDomain: 0
+						})),
+						put: vi.fn(async () => {})
+					}
+				},
+				get: vi.fn(() => null),
+				set: vi.fn()
+			};
+
+			const result = await settingService.query(c);
+			actual.push([projectLink, result.projectLink]);
+		}
+
+		expect(actual).toEqual(expected);
+	});
 });

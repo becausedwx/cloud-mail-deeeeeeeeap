@@ -11,9 +11,42 @@ import verifyRecordService from './verify-record-service';
 import userContext from '../security/user-context';
 import { createBootstrapWebsiteConfig, getBootstrapStatus } from '../init/status';
 import { parseConfiguredDomains } from '../utils/domain-utils';
+import emailUtils from '../utils/email-utils';
+
+// setting 表可通过 /setting/set 更新的字段白名单（与 entity/setting.js 列对齐）
+const SETTING_UPDATABLE_FIELDS = new Set([
+	'register', 'receive', 'title', 'manyEmail', 'addEmail', 'autoRefresh',
+	'addEmailVerify', 'registerVerify', 'regVerifyCount', 'addVerifyCount', 'send',
+	'r2Domain', 'secretKey', 'siteKey', 'regKey', 'background',
+	'tgBotToken', 'tgChatId', 'tgBotStatus', 'forwardEmail', 'forwardStatus',
+	'ruleEmail', 'ruleType', 'loginOpacity', 'resendTokens',
+	'noticeTitle', 'noticeContent', 'noticeType', 'noticeDuration', 'noticePosition',
+	'noticeOffset', 'noticeWidth', 'notice', 'noRecipient', 'loginDomain',
+	'bucket', 'region', 'endpoint', 's3AccessKey', 's3SecretKey', 'forcePathStyle',
+	'customDomain', 'tgMsgFrom', 'tgMsgTo', 'tgMsgText',
+	'minEmailPrefix', 'emailPrefixFilter', 'blackSubject', 'blackContent', 'blackFrom',
+	'aiCode', 'aiCodeFilter'
+]);
+// 凭据类字段仅允许管理员修改
+const SETTING_CREDENTIAL_FIELDS = new Set([
+	'secretKey', 'siteKey', 's3AccessKey', 's3SecretKey', 'resendTokens', 'tgBotToken'
+]);
 
 const SETTING_CACHE_TTL = 30 * 1000;
 let settingCache = null;
+
+// projectLink 直接作为登录页角标的 href 下发，所以只放行 http(s)：
+// 未配置或 true 用官方仓库地址，'false' 关闭角标，其余非 http(s) 值一并关闭。
+export function resolveProjectLink(value) {
+	if (value === undefined || value === null || value === '' || value === true || value === 'true') {
+		return constant.DEFAULT_PROJECT_LINK;
+	}
+	if (value === false || value === 'false') {
+		return false;
+	}
+	const link = String(value).trim();
+	return /^https?:\/\//i.test(link) ? link : false;
+}
 
 function cloneSetting(settingRow) {
 	return JSON.parse(JSON.stringify(settingRow));
@@ -110,7 +143,6 @@ const settingService = {
 
 
 		let linuxdoSwitch = c.env.linuxdo_switch;
-		let projectLink = c.env.project_link;
 
 		if (typeof linuxdoSwitch === 'string' && linuxdoSwitch === 'true') {
 			linuxdoSwitch = true
@@ -120,15 +152,7 @@ const settingService = {
 			linuxdoSwitch = false
 		}
 
-		if (typeof projectLink === 'string' && projectLink === 'false') {
-			projectLink = false
-		} else if (projectLink === false) {
-			projectLink = false
-		} else {
-			projectLink = true
-		}
-
-		settingData.projectLink = projectLink;
+		settingData.projectLink = resolveProjectLink(c.env.project_link);
 
 		settingData.linuxdoClientId = c.env.linuxdo_client_id;
 		settingData.linuxdoCallbackUrl = c.env.linuxdo_callback_url;
@@ -189,7 +213,29 @@ const settingService = {
 	},
 
 	async set(c, params) {
+		params = params && typeof params === 'object' && !Array.isArray(params) ? params : {};
+		for (const key of Object.keys(params)) {
+			if (!SETTING_UPDATABLE_FIELDS.has(key)) {
+				delete params[key];
+			}
+		}
 		const settingData = await this.query(c);
+
+		// 前端会整包回传设置对象，其中含明文下发的 tgBotToken 等凭据字段；
+		// 值未变化的凭据字段不视为修改，只有真正改动凭据值才要求管理员身份
+		for (const key of Object.keys(params)) {
+			if (SETTING_CREDENTIAL_FIELDS.has(key) && key !== 'resendTokens' && params[key] === settingData[key]) {
+				delete params[key];
+			}
+		}
+		const credentialKeys = Object.keys(params).filter(key => SETTING_CREDENTIAL_FIELDS.has(key));
+		if (credentialKeys.length > 0) {
+			const user = userContext.getUser(c);
+			if (!user || !emailUtils.isSameAddress(user.email, c.env.admin)) {
+				throw new BizError(t('unauthorized'), 403);
+			}
+		}
+
 		let resendTokens = { ...settingData.resendTokens, ...params.resendTokens };
 		Object.keys(resendTokens).forEach(domain => {
 			if (!resendTokens[domain]) delete resendTokens[domain];

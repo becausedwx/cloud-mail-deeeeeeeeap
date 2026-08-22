@@ -31,7 +31,7 @@ const CLOUDFLARE_EMAIL_MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
 const RESEND_MAX_MESSAGE_BYTES = 40 * 1000 * 1000;
 const PROVIDER_MESSAGE_OVERHEAD_BYTES = 2 * 1024;
 const PROVIDER_ATTACHMENT_OVERHEAD_BYTES = 1024;
-const RECEIVE_RECOVERY_EMAIL_LIMIT = 2;
+export const RECEIVE_RECOVERY_EMAIL_LIMIT = 2;
 const CLOUDFLARE_EMAIL_EXPLICIT_ERROR_CODES = new Set([
 	'E_VALIDATION_ERROR',
 	'E_FIELD_MISSING',
@@ -288,8 +288,6 @@ const emailService = {
 			query.orderBy(desc(email.emailId));
 		}
 
-		const listQuery = query.limit(size + 1).all();
-
 		const totalQuery = withTotal ? orm(c).select({ total: count() }).from(email)
 			.leftJoin(
 				account,
@@ -302,8 +300,8 @@ const emailService = {
 					eq(email.type, type),
 					eq(email.isDel, isDel.NORMAL),
 					eq(account.isDel, isDel.NORMAL)
-				)
-		).get() : Promise.resolve({ total: 0 });
+			)
+		) : null;
 
 		const latestEmailQuery = withLatest ? orm(c).select({
 			emailId: email.emailId,
@@ -316,9 +314,18 @@ const emailService = {
 				eq(email.type, type),
 				eq(email.isDel, isDel.NORMAL)
 			))
-			.orderBy(desc(email.emailId)).limit(1).get() : Promise.resolve(null);
+			.orderBy(desc(email.emailId)).limit(1) : null;
 
-		let [list, totalRow, latestEmail] = await Promise.all([listQuery, totalQuery, latestEmailQuery]);
+		// list/total/latest 合并一次 D1 batch，省 2 个 RTT
+		const db = orm(c);
+		const batchStmts = [query.limit(size + 1)];
+		if (totalQuery) batchStmts.push(totalQuery);
+		if (latestEmailQuery) batchStmts.push(latestEmailQuery);
+		const batchResults = await db.batch(batchStmts);
+		let list = batchResults[0].rows ?? batchResults[0];
+		let resultIdx = 1;
+		let totalRow = withTotal ? batchResults[resultIdx++] : { total: 0 };
+		let latestEmail = withLatest ? batchResults[resultIdx] : null;
 
 		const hasMore = list.length > size;
 		list = hasMore ? list.slice(0, size) : list;
@@ -540,7 +547,7 @@ const emailService = {
 
 		//保存到数据库并返回结果
 		const emailResult = await orm(c).insert(email).values(emailData).returning().get();
-		await emailSearchService.syncEmailIds(c, [emailResult.emailId]);
+		// 不同步搜索表：SAVING 状态行被搜索端排除，终态更新时会再同步
 		let attList;
 		try {
 			//保存内嵌附件
@@ -661,6 +668,23 @@ const emailService = {
 			emailId: params.emailId,
 			provider
 		});
+
+		// 附件编码等确定性本地工作在进入网络 I/O 之前完成；
+		// 这里的异常属于本地失败，判 FAILED 允许用户重发，而不是 UNKNOWN。
+		try {
+			params.preparedAttachments = params.useCloudflareEmail
+				? await this.toCloudflareAttachments(params.attachments)
+				: await this.toResendAttachments(params.attachments);
+		} catch (e) {
+			try {
+				await deliveryAttemptService.markPreparationFailed(c, attempt.attemptId);
+			} catch {
+				// The email row below still records the local preparation failure.
+			}
+			await this.markSendFailed(c, params.emailId, 'LOCAL_PREPARATION_FAILED');
+			throw new BizError(e?.message || 'Failed to prepare outbound message');
+		}
+
 		await deliveryAttemptService.markInFlight(c, attempt.attemptId);
 
 		try {
@@ -784,7 +808,6 @@ const emailService = {
 				eq(email.type, emailConst.type.SEND),
 				eq(email.status, emailConst.status.SAVING)
 			)).run();
-			await emailSearchService.syncEmailIds(c, [emailId]);
 		} catch (e) {
 			console.error(`Failed to persist unknown delivery state for email ${emailId}`);
 		}
@@ -821,7 +844,7 @@ const emailService = {
 			sendForm.html = params.html;
 		}
 
-		const attachments = await this.toCloudflareAttachments(params.attachments);
+		const attachments = params.preparedAttachments ?? await this.toCloudflareAttachments(params.attachments);
 		if (attachments.length > 0) {
 			sendForm.attachments = attachments;
 		}
@@ -851,7 +874,7 @@ const emailService = {
 			subject: params.subject,
 			text: params.text,
 			html: params.html,
-			attachments: await this.toResendAttachments(params.attachments)
+			attachments: params.preparedAttachments ?? await this.toResendAttachments(params.attachments)
 		};
 
 		if (params.sendType === 'reply') {
@@ -1346,6 +1369,22 @@ const emailService = {
 			.groupBy(email.userId);
 		return result;
 	},
+	// 用户管理页统计：一条 GROUP BY 查询同时给出 收/发 x 正常/删除 四类计数（原 4 条查询合并为 1 条）
+	async selectUserEmailStatList(c, userIds) {
+		return orm(c)
+			.select({
+				userId: email.userId,
+				type: email.type,
+				isDel: email.isDel,
+				count: count(email.emailId)
+			})
+			.from(email)
+			.where(and(
+				inArray(email.userId, userIds),
+				ne(email.status, emailConst.status.SAVING),
+			))
+			.groupBy(email.userId, email.type, email.isDel);
+	},
 
 	async allList(c, params) {
 
@@ -1464,8 +1503,11 @@ const emailService = {
 			query.orderBy(desc(email.emailId));
 		}
 
-		const listQuery = query.limit(size + 1).all();
-		const totalQuery = withTotal ? queryCount.get() : queryCount;
+		const queryCountStmt = withTotal ? orm(c).select({ total: count() })
+			.from(email)
+			.leftJoin(user, eq(email.userId, user.userId))
+			.where(and(...countConditions)) : null;
+
 		const latestEmailQuery = withLatest ? orm(c).select({
 			emailId: email.emailId,
 			accountId: email.accountId,
@@ -1475,9 +1517,18 @@ const emailService = {
 				eq(email.type, emailConst.type.RECEIVE),
 				ne(email.status, emailConst.status.SAVING)
 			))
-			.orderBy(desc(email.emailId)).limit(1).get() : Promise.resolve(null);
+			.orderBy(desc(email.emailId)).limit(1) : null;
 
-		let [list, totalRow, latestEmail] = await Promise.all([listQuery, totalQuery, latestEmailQuery]);
+		// list/total/latest 合并一次 D1 batch，省 2 个 RTT
+		const db = orm(c);
+		const batchStmts = [query.limit(size + 1)];
+		if (queryCountStmt) batchStmts.push(queryCountStmt);
+		if (latestEmailQuery) batchStmts.push(latestEmailQuery);
+		const batchResults = await db.batch(batchStmts);
+		let list = batchResults[0].rows ?? batchResults[0];
+		let resultIdx = 1;
+		let totalRow = withTotal ? (batchResults[resultIdx++] ?? { total: 0 }) : { total: 0 };
+		let latestEmail = withLatest ? batchResults[resultIdx] : null;
 
 		const hasMore = list.length > size;
 		list = hasMore ? list.slice(0, size) : list;
@@ -1660,6 +1711,11 @@ const emailService = {
 			LIMIT ${batchLimit}
 		`).bind(emailConst.status.SAVING, emailConst.type.RECEIVE).all();
 
+		// scanned 只统计真正抢到的行，resolved 统计被推离 SAVING 的行；
+		// 调用方据此告诉管理员本次实际处理了多少，而不是报批次上限
+		let scanned = 0;
+		let resolved = 0;
+
 		for (const pendingRow of pendingRows) {
 			const claimed = await c.env.db.prepare(`
 				UPDATE email
@@ -1677,6 +1733,7 @@ const emailService = {
 			if (!claimed) {
 				continue;
 			}
+			scanned += 1;
 			let summary;
 			try {
 				summary = await attService.reconcileReceived(c, pendingRow.emailId);
@@ -1693,26 +1750,31 @@ const emailService = {
 			const expectedCount = Number(pendingRow.attachmentCount);
 			if (pendingRow.attachmentCount === null || !Number.isInteger(expectedCount) || expectedCount < 0) {
 				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_METADATA_MISSING');
+				resolved += 1;
 				continue;
 			}
 
 			if (summary.overflow) {
 				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_RECOVERY_LIMIT_EXCEEDED');
+				resolved += 1;
 				continue;
 			}
 
 			if (summary.total !== expectedCount) {
 				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_COUNT_MISMATCH');
+				resolved += 1;
 				continue;
 			}
 
 			if (summary.failed > 0) {
 				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_RECOVERY_FAILED');
+				resolved += 1;
 				continue;
 			}
 
 			if (summary.other > 0) {
 				await this.failReceive(c, pendingRow.emailId, 'ATTACHMENT_STATE_INVALID');
+				resolved += 1;
 				continue;
 			}
 
@@ -1726,6 +1788,7 @@ const emailService = {
 					pendingRow.recipientExists ? emailConst.status.RECEIVE : emailConst.status.NOONE,
 					pendingRow.emailId
 				);
+				resolved += 1;
 			} catch (error) {
 				if (error?.code !== 'INCOMING_ATTACHMENTS_NOT_READY') {
 					throw error;
@@ -1733,6 +1796,8 @@ const emailService = {
 				// Another recovery runner changed this email first. Continue the bounded batch.
 			}
 		}
+
+		return { scanned, resolved, batch: batchLimit };
 	},
 
 	async updateCode(c, emailId, code) {

@@ -1,5 +1,5 @@
 <template>
-  <div id="login-box" :style="backgroundReady ? 'background: var(--el-bg-color)' : ''" v-loading="oauthLoading" :element-loading-text="$t('loginLoading')">
+  <div id="login-box" :class="{'has-custom-background': !!settingStore.settings.background}" v-loading="oauthLoading" :element-loading-text="$t('loginLoading')">
     <div id="background-wrap" v-if="!settingStore.settings.background">
       <div class="x1 cloud"></div>
       <div class="x2 cloud"></div>
@@ -141,7 +141,7 @@
         </el-button>
       </div>
     </el-dialog>
-    <a v-show="settingStore.settings.projectLink" class="github" href="https://github.com/maillab/cloud-mail">
+    <a v-show="settingStore.settings.projectLink" class="github" :href="settingStore.settings.projectLink">
       <Icon icon="mingcute:github-line" color="#1890ff" width="20" height="20" />
     </a>
   </div>
@@ -176,6 +176,7 @@ import {
   startAuthSession
 } from "@/session/auth-session.js";
 import {queueLoginBackground} from "@/views/login/login-background.js";
+import {consumePrefetchLoginBackground} from "@/views/login/login-background-prefetch.js";
 
 const {t} = useI18n();
 const accountStore = useAccountStore();
@@ -281,7 +282,10 @@ onMounted(() => {
     if (!value) return
 
     const src = cvtR2Url(value)
+    // 复用 init 阶段预取的 Image，避免重复下载
+    const prefetchedImage = consumePrefetchLoginBackground(src)
     cancelBackgroundLoad = queueLoginBackground(src, {
+      reuseImage: prefetchedImage || undefined,
       onReady: decodedSrc => {
         loadedBackgroundUrl.value = decodedSrc
         nextTick(() => {
@@ -845,8 +849,14 @@ function submitRegister() {
 }
 
 
+/* 未配背景时才用天空渐变；配了背景时用中性底色，
+   图片就绪前不再闪现蓝天 */
+#login-box.has-custom-background {
+  background: var(--el-bg-color);
+}
+
 #login-box {
-  background: linear-gradient(to bottom, #2980b9, #6dd5fa, #fff);
+  background: var(--login-sky-gradient);
   font: 100% Arial, sans-serif;
   height: 100%;
   margin: 0;
@@ -880,39 +890,40 @@ function submitRegister() {
   }
 }
 
+/* 动画只改 transform（合成层渲染），不再逐帧触发重排 */
 @keyframes animateCloud {
-  0% {
-    margin-left: -500px;
+  from {
+    transform: translateX(-500px) scale(var(--cloud-scale, 1));
   }
 
-  100% {
-    margin-left: 100%;
+  to {
+    transform: translateX(100vw) scale(var(--cloud-scale, 1));
   }
 }
 
 .x1 {
+  --cloud-scale: 0.65;
   animation: animateCloud 30s linear infinite;
-  transform: scale(0.65);
 }
 
 .x2 {
+  --cloud-scale: 0.3;
   animation: animateCloud 15s linear infinite;
-  transform: scale(0.3);
 }
 
 .x3 {
+  --cloud-scale: 0.5;
   animation: animateCloud 25s linear infinite;
-  transform: scale(0.5);
 }
 
 .x4 {
+  --cloud-scale: 0.4;
   animation: animateCloud 13s linear infinite;
-  transform: scale(0.4);
 }
 
 .x5 {
+  --cloud-scale: 0.55;
   animation: animateCloud 20s linear infinite;
-  transform: scale(0.55);
 }
 
 .cloud {
@@ -948,4 +959,18 @@ function submitRegister() {
   top: -90px;
 }
 
+/* 暗色模式：夜空背景，云朵降透明度融入夜色 */
+html.dark #login-box {
+  background: var(--login-night-gradient);
+}
+
+html.dark .cloud {
+  background: linear-gradient(to bottom, rgba(70, 78, 92, 0.55) 5%, rgba(48, 54, 66, 0.55) 100%);
+  box-shadow: 0 8px 5px rgba(0, 0, 0, 0.3);
+}
+
+html.dark .cloud:after,
+html.dark .cloud:before {
+  background: rgba(70, 78, 92, 0.55);
+}
 </style>

@@ -56,7 +56,7 @@ function updateContent() {
 
       a {
         text-decoration: none;
-        color: #0E70DF;
+        color: var(--el-color-primary, #0E70DF);
       }
 
       .shadow-content {

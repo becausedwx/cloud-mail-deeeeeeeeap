@@ -42,6 +42,15 @@
                    @pointerdown.prevent.stop="changeLang(item.value)"/>
       </el-select>
     </div>
+    <div class="local-drafts">
+      <div class="title">{{$t('localDrafts')}}</div>
+      <div style="color: var(--regular-text-color);">
+        {{$t('localDraftsMsg')}}
+      </div>
+      <div>
+        <el-button type="primary" :loading="clearDraftsLoading" @click="clearDraftsConfirm">{{$t('clearLocalDrafts')}}</el-button>
+      </div>
+    </div>
     <div class="del-email" v-perm="'my:delete'">
       <div class="title">{{$t('deleteUser')}}</div>
       <div style="color: var(--regular-text-color);">
@@ -72,11 +81,15 @@ import {useSettingStore} from "@/store/setting.js";
 import {SUPPORTED_LANGS} from "@/i18n/index.js";
 import {clearAuthSession} from "@/session/auth-session.js";
 import {changePasswordAndSignOut} from "@/views/setting/password-change.js";
+import {waitForDraftDatabase} from "@/db/db.js";
+import {clearAllDrafts} from "@/db/draft-repository.js";
+import {userDraftStore} from "@/store/draft.js";
 
 const { t } = useI18n()
 const accountStore = useAccountStore()
 const settingStore = useSettingStore()
 const userStore = useUserStore();
+const draftStore = userDraftStore();
 const setPwdLoading = ref(false)
 const setNameShow = ref(false)
 const accountName = ref(null)
@@ -142,6 +155,37 @@ const form = reactive({
   newPassword: '',
   confirmPassword: '',
 })
+
+const clearDraftsLoading = ref(false)
+
+const clearDraftsConfirm = () => {
+  ElMessageBox.confirm(t('clearDraftsConfirmMsg'), {
+    confirmButtonText: t('confirm'),
+    cancelButtonText: t('cancel'),
+    type: 'warning'
+  }).then(() => {
+    clearDraftsLoading.value = true
+    waitForDraftDatabase().then(database => {
+      if (!database) return
+      return clearAllDrafts(database)
+    }).then(() => {
+      draftStore.refreshList++
+      ElMessage({
+        message: t('clearDraftsSuccessMsg'),
+        type: 'success',
+        plain: true,
+      })
+    }).catch(() => {
+      ElMessage({
+        message: t('clearDraftsFailMsg'),
+        type: 'error',
+        plain: true,
+      })
+    }).finally(() => {
+      clearDraftsLoading.value = false
+    })
+  })
+}
 
 const deleteConfirm = () => {
   ElMessageBox.confirm(t('delAccountConfirm'), {
@@ -293,6 +337,14 @@ function submitPwd() {
     .language-select {
       width: 100px;
     }
+  }
+
+  .local-drafts {
+    font-size: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-bottom: 40px;
   }
 
   .del-email {

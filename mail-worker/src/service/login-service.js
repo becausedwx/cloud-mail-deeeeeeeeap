@@ -18,25 +18,62 @@ import regKeyService from './reg-key-service';
 import dayjs from 'dayjs';
 import { toUtc } from '../utils/date-uitil';
 import { t } from '../i18n/i18n.js';
+import authInfoCache from '../security/auth-info-cache';
 import verifyRecordService from './verify-record-service';
 import reqUtils from '../utils/req-utils';
-import authRateLimitService from './auth-rate-limit-service';
+import authRateLimitService, { markAuthAbuse } from './auth-rate-limit-service';
 import { isConfiguredDomain } from '../utils/domain-utils';
 
 const loginService = {
 
 	async register(c, params, oauth = false) {
 
+		const rateIdentity = oauth
+			? null
+			: await authRateLimitService.assertAllowed(c, 'register', params?.email);
+
+		try {
+			const regResult = await this.registerInternal(c, params, oauth);
+			if (rateIdentity) {
+				try {
+					await authRateLimitService.clear(c, rateIdentity);
+				} catch (clearError) {
+					// 注册已成功，限流清理失败不应把成功响应变成 429
+					console.warn('register rate-limit clear failed');
+				}
+			}
+			return regResult;
+		} catch (e) {
+			if (rateIdentity && e?.authAbuse) {
+				await authRateLimitService.recordFailure(c, rateIdentity);
+			} else if (rateIdentity) {
+				try {
+					await authRateLimitService.releaseReservation(c, rateIdentity);
+				} catch (releaseError) {
+					// 归还名额失败只会让该名额等 30 秒自动过期，不应盖掉真正的失败原因
+					console.warn('register rate-limit reservation release failed');
+				}
+			}
+			throw e;
+		}
+	},
+
+	async registerInternal(c, params, oauth = false) {
+
 		const { email, password, token, code } = params;
 		if (emailUtils.isSameAddress(email, c.env.admin)) {
-			throw new BizError('Administrator account must be created through the initialization flow', 403);
+			throw markAuthAbuse(new BizError('Administrator account must be created through the initialization flow', 403));
 		}
 
 		let { regKey, register, registerVerify, regVerifyCount, minEmailPrefix, emailPrefixFilter } = await settingService.query(c)
 
 		if (oauth) {
 			registerVerify = settingConst.registerVerify.CLOSE;
-			register = settingConst.register.OPEN;
+			// 默认尊重站点注册开关；仅在显式配置 oauth_auto_register 时保留旧的自动放行行为
+			const autoRegister = String(c.env.oauth_auto_register ?? '').toLowerCase();
+			if (autoRegister === 'true' || autoRegister === '1') {
+				register = settingConst.register.OPEN;
+			}
 		}
 
 		if (register === settingConst.register.CLOSE) {
@@ -92,12 +129,13 @@ const loginService = {
 
 		const accountRow = await accountService.selectByEmailIncludeDel(c, email);
 
+		// 这两条回答的是「该邮箱是否已存在」，是可被反复调用的枚举信号
 		if (accountRow && accountRow.isDel === isDel.DELETE) {
-			throw new BizError(t('isDelUser'));
+			throw markAuthAbuse(new BizError(t('isDelUser')));
 		}
 
 		if (accountRow) {
-			throw new BizError(t('isRegAccount'));
+			throw markAuthAbuse(new BizError(t('isRegAccount')));
 		}
 
 		let defType = null
@@ -226,7 +264,8 @@ const loginService = {
 		const regKeyRow = await regKeyService.selectByCode(c, code);
 
 		if (!regKeyRow) {
-			throw new BizError(t('notExistRegKey'));
+			// 注册码猜测，与配置类失败区别对待
+			throw markAuthAbuse(new BizError(t('notExistRegKey')));
 		}
 
 		if (regKeyRow.count <= 0) {
@@ -281,37 +320,36 @@ const loginService = {
 
 		if (!userRow) {
 			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
-			throw new BizError(t('notExistUser'));
+			throw new BizError(t('loginFailed'));
 		}
 
 		if(userRow.isDel === isDel.DELETE) {
 			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
-			throw new BizError(t('isDelUser'));
-		}
-
-		if(userRow.status === userConst.status.BAN) {
-			if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
-			throw new BizError(t('isBanUser'));
+			throw new BizError(t('loginFailed'));
 		}
 
 		if (!noVerifyPwd) {
 			if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
 				if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
-				throw new BizError(t('IncorrectPwd'));
+				throw new BizError(t('loginFailed'));
 			}
 
 			const currentUserRow = await userService.upgradePasswordHash(c, userRow, password);
 			if (!currentUserRow) {
 				if (rateIdentity) await authRateLimitService.recordFailure(c, rateIdentity);
-				throw new BizError(t('IncorrectPwd'));
+				throw new BizError(t('loginFailed'));
 			}
 			Object.assign(userRow, currentUserRow);
 
 			await authRateLimitService.clear(c, rateIdentity);
 		}
 
+		if (userRow.status === userConst.status.BAN) {
+			throw new BizError(t('isBanUser'));
+		}
+
 		const uuid = uuidv4();
-		const jwt = await JwtUtils.generateToken(c,{ userId: userRow.userId, token: uuid });
+		const jwt = await JwtUtils.generateToken(c,{ userId: userRow.userId, token: uuid }, constant.TOKEN_EXPIRE);
 
 		let authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userRow.userId, { type: 'json' });
 
@@ -337,12 +375,18 @@ const loginService = {
 
 		await userService.updateUserInfo(c, userRow.userId);
 
-		await c.env.kv.put(KvConst.AUTH_INFO + userRow.userId, JSON.stringify(authInfo), { expirationTtl: constant.TOKEN_EXPIRE });
+		if (authInfo.user) {
+			const { password: _password, salt: _salt, ...safeUser } = authInfo.user;
+			authInfo.user = safeUser;
+		}
+
+		await authInfoCache.refresh(c, userRow.userId, authInfo);
 		return jwt;
 	},
 
 	async logout(c, userId) {
 		const token = await userContext.getToken(c);
+		// 撤销必须读权威源：缓存快照可能早于本 token 的签发，命中后会误判 token 不存在而跳过撤销
 		const authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userId, { type: 'json' });
 		if (!authInfo) {
 			return;
@@ -353,10 +397,10 @@ const loginService = {
 		}
 		authInfo.tokens.splice(index, 1);
 		if (authInfo.tokens.length === 0) {
-			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
+			await authInfoCache.remove(c, userId);
 			return;
 		}
-		await c.env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify(authInfo), { expirationTtl: constant.TOKEN_EXPIRE });
+		await authInfoCache.refresh(c, userId, authInfo);
 	}
 
 };

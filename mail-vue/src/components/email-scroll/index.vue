@@ -11,19 +11,26 @@
       <div class="header-left" :style="'padding-left:' + actionLeft">
 
         <slot name="first"></slot>
-        <Icon class="icon reload" icon="ion:reload" width="18" height="18" @click="refresh"/>
-        <Icon v-perm="'email:delete'" class="icon delete" icon="uiw:delete" width="16" height="16"
-              v-if="getSelectedMailsIds().length > 0"
-              @click="handleDelete"/>
-        <Icon v-perm="'email:delete'" class="icon delete" icon="fluent:mail-read-20-regular" width="21" height="21"
-              v-if="getSelectedMailsIds().length > 0 && showUnread"
-              @click="handleRead"/>
+        <Icon class="icon reload action-icon" icon="ion:reload" width="18" height="18" role="button" tabindex="0"
+              :aria-label="t('refreshList')" @click="refresh" @keydown.enter.prevent="refresh"
+              @keydown.space.prevent="refresh"/>
+        <Icon v-perm="'email:delete'" class="icon delete action-icon" icon="uiw:delete" width="16" height="16"
+              role="button" tabindex="0" :aria-label="t('delete')"
+              v-if="selectedCount > 0"
+              @click="handleDelete" @keydown.enter.prevent="handleDelete"
+              @keydown.space.prevent="handleDelete"/>
+        <Icon v-perm="'email:delete'" class="icon delete action-icon" icon="fluent:mail-read-20-regular" width="21" height="21"
+              role="button" tabindex="0" :aria-label="t('markAsRead')"
+              v-if="selectedCount > 0 && showUnread"
+              @click="handleRead" @keydown.enter.prevent="handleRead"
+              @keydown.space.prevent="handleRead"/>
       </div>
 
       <div class="header-right">
         <span class="email-count" v-if="total">{{ $t('emailCount', {total: total}) }}</span>
-        <Icon v-if="showAccountIcon" class="more-icon icon" width="16" height="16" icon="akar-icons:dot-grid-fill"
-              @click="changeAccountShow"/>
+        <Icon v-if="showAccountIcon" class="more-icon icon action-icon" width="16" height="16" icon="akar-icons:dot-grid-fill"
+              role="button" tabindex="0" :aria-label="t('settings')" @click="changeAccountShow"
+              @keydown.enter.prevent="changeAccountShow" @keydown.space.prevent="changeAccountShow"/>
       </div>
     </div>
 
@@ -31,15 +38,17 @@
       <UseVirtualList ref="scrollbarRef"
                         @scroll="onScroll"
                         :list="list"
-                        :options="{ itemHeight: itemHeight, overscan: 15 }"
+                        :options="{ itemHeight: itemHeight, overscan: 6 }"
                         class="virtual"
                         style="height: 100%"
                         v-if="!loading && emailList.length > 0"
                         :key="keyCount"
         >
           <template #default="{ data: item, index }" >
-            <div :class="'email-row ' + props.type"
+            <div v-memo="[item.checked, item.unread, item.isStar, item.rightChecked, item.statusIcon, item.isDel, showUnread, showStatus, selectedCount === 0]"
+                 :class="'email-row ' + props.type"
                  :data-checked="item.checked"
+                 :data-unread="showUnread && item.unread === EmailUnreadEnum.UNREAD"
                  @click="jumpDetails(item)"
                  @mouseenter="preloadEmailDetail(item)"
                  @mouseleave="cancelPreloadEmailDetail"
@@ -47,7 +56,7 @@
                  v-if="!item.expand"
                  :key="item.emailId"
                  @contextmenu="handleContextmenu($event, item)"
-                 :style="item.rightChecked ? 'background: #FDF6EC' : ''"
+                 :style="item.rightChecked ? 'background: var(--right-checked-background)' : ''"
             >
               <el-checkbox :class=" props.type === 'all-email' ? 'all-email-checkbox' : 'checkbox'"
                            v-model="item.checked" @click.stop></el-checkbox>
@@ -56,7 +65,7 @@
                 <Icon v-else icon="solar:star-line-duotone" width="18" height="18"/>
               </div>
               <div v-if="!showStar"></div>
-              <div class="title" :class="accountShow ? 'title-column' : 'title-column'">
+              <div class="title title-column">
 
                 <div class="email-sender" :style=" (showStatus ? 'gap: 10px;' : '') + ((item.unread === EmailUnreadEnum.UNREAD && showUnread)  ? 'font-weight: bold' : '')">
                   <div class="email-status" v-if="showStatus">
@@ -253,7 +262,6 @@ import {fromNow} from "@/utils/day.js";
 import {useI18n} from "vue-i18n";
 import {EmailUnreadEnum} from "@/enums/email-enum.js";
 import { UseVirtualList } from '@vueuse/components'
-import { useScroll } from '@vueuse/core'
 import {sanitizeHtml} from "@/utils/html-sanitize.js";
 import {createRequestCoordinator} from "@/components/email-scroll/request-coordinator.js";
 import {
@@ -339,6 +347,7 @@ const isIndeterminate = ref(false);
 const scroll = ref(null)
 const firstLoad = ref(true)
 let scrollTop = 0
+const isArriveBottom = ref(false)
 const latestEmail = ref(null)
 const scrollbarRef = ref(null)
 const requestCoordinator = createRequestCoordinator(getSessionGeneration)
@@ -351,7 +360,9 @@ const dropdownRef = ref(null);
 const dropdownCloseLock = ref(false);
 const dropdownShow = ref(false);
 const rightClickEmail = ref({});
-const checkedEmailCount = ref(0);
+// 勾选状态统一由 computed 派生：模板/逻辑只读，避免每次勾选触发 O(N) 全表扫描
+const selectedCount = computed(() => emailList.filter(item => item.checked).length);
+const selectedIds = computed(() => emailList.filter(item => item.checked).map(item => item.emailId));
 const position = ref(
     DOMRect.fromRect({
       x: 0,
@@ -436,12 +447,11 @@ onUnmounted(() => {
 getEmailList()
 
 function onScroll(e) {
-  scrollTop = e.target.scrollTop;
+	const target = e.target;
+	scrollTop = target.scrollTop;
+	// 手写触底判断：距底 1200px 内触发预加载，替代 useScroll（省掉每帧 getComputedStyle）
+	isArriveBottom.value = target.scrollHeight - target.scrollTop - target.clientHeight <= 1200
 }
-
-const { arrivedState } = useScroll(scrollbarRef, {
-  offset: { bottom: 1200 }
-})
 
 
 const list = computed(() => {
@@ -495,22 +505,17 @@ watch(noLoading, (isNoLoading) => {
 
 
 // 监听是否到达底部
-watch(() => arrivedState.bottom, (isBottom) => {
+watch(isArriveBottom, (isBottom) => {
   if (isBottom && activeRuntime.isActive() && !loading.value) {
     loadData();
   }
 });
 
-watch(
-    () => emailList.map(item => item.checked),
-    () => {
-      checkedEmailCount.value = emailList.length
-      if (emailList.length > 0) {
-        updateCheckStatus();
-      }
-    },
-    {deep: true}
-);
+watch(selectedCount, () => {
+	if (emailList.length > 0) {
+	  updateCheckStatus();
+	}
+});
 
 
 watch(() => emailStore.deleteIds, () => {
@@ -888,9 +893,9 @@ function handleCheckAllChange(val) {
   isIndeterminate.value = false;
 }
 
-// 获取选中的邮件列表id
+// 获取选中的邮件列表id（复用 computed，避免重复扫描）
 function getSelectedMailsIds() {
-  return emailList.filter(item => item.checked).map(item => item.emailId);
+  return selectedIds.value;
 }
 
 function getSelectedDraftsIds() {
@@ -898,10 +903,8 @@ function getSelectedDraftsIds() {
 }
 
 function updateCheckStatus() {
-  const checkedCount = emailList.filter(item => item.checked).length;
-  checkedEmailCount.value = checkedCount;
-  checkAll.value = checkedCount === emailList.length;
-  isIndeterminate.value = checkedCount > 0 && checkedCount < emailList.length;
+	  checkAll.value = selectedCount.value === emailList.length;
+	  isIndeterminate.value = selectedCount.value > 0 && selectedCount.value < emailList.length;
 }
 
 function jumpDetails(email) {
@@ -1024,26 +1027,35 @@ function scheduleNextPagePrefetch(request) {
   });
 }
 
+// 状态图标表按需构建一次：每封邮件重建 Map + 8 次 t() 是纯浪费；
+// 语言切换时由 keyCount 强刷兜底，无需响应式重建
+function buildStatusIconMap() {
+  return {
+    0: { icon: 'ic:round-mark-email-read', color: '#51C76B', content: t('received') },
+    1: { icon: 'bi:send-arrow-up-fill',  color: '#51C76B', content: t('sent') },
+    2: { icon: 'bi:send-check-fill',     color: '#51C76B', content: t('delivered') },
+    3: { icon: 'bi:send-x-fill',         color: '#F56C6C', content: t('bounced') },
+    8: { icon: 'bi:send-x-fill',         color: '#F56C6C', content: t('bounced') },
+    4: { icon: 'bi:send-exclamation-fill', color: '#FBBD08', content: t('complained') },
+    5: { icon: 'bi:send-arrow-up-fill',  color: '#FBBD08', content: t('delayed') },
+    7: { icon: 'ic:round-mark-email-read', color: '#FBBD08', content: t('noRecipient') },
+  };
+}
+let statusIconMap = null;
+function getStatusIconMap() {
+  if (!statusIconMap) statusIconMap = buildStatusIconMap();
+  return statusIconMap;
+}
+
 function handleList(list) {
+  const icons = getStatusIconMap();
   list.forEach(email => {
     email.formatText = htmlToText(email)
     email.formatCreateTime = fromNow(email.createTime);
-    email.test = t('received')
-    const statusIconMap = {
-      0: { icon: 'ic:round-mark-email-read', color: '#51C76B', content: t('received') },
-      1: { icon: 'bi:send-arrow-up-fill',  color: '#51C76B', content: t('sent') },
-      2: { icon: 'bi:send-check-fill',     color: '#51C76B', content: t('delivered') },
-      3: { icon: 'bi:send-x-fill',         color: '#F56C6C', content: t('bounced') },
-      8: { icon: 'bi:send-x-fill',         color: '#F56C6C', content: t('bounced') },
-      4: { icon: 'bi:send-exclamation-fill', color: '#FBBD08', content: t('complained') },
-      5: { icon: 'bi:send-arrow-up-fill',  color: '#FBBD08', content: t('delayed') },
-      7: { icon: 'ic:round-mark-email-read', color: '#FBBD08', content: t('noRecipient') },
-    };
-
     if (email.isDel) {
       email.isDelContent = t('selectDeleted');
     }
-    email.statusIcon = statusIconMap[email.status];
+    email.statusIcon = icons[email.status];
   })
 }
 
@@ -1407,6 +1419,19 @@ function loadData() {
     }
   }
 
+  /* 未读行左侧 3px 主色指示条，与侧栏菜单选中态同一设计语言 */
+  &[data-unread="true"]::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 3px;
+    height: 60%;
+    border-radius: 2px;
+    background: var(--el-color-primary);
+    transform: translateY(-50%);
+  }
+
   &:hover {
     background-color: var(--email-hover-background);
     z-index: 0;
@@ -1489,9 +1514,21 @@ function loadData() {
     cursor: pointer;
   }
 
+  /* 透明 padding 扩点击区至≥40px，视觉尺寸不变；键盘焦点给主色环 */
+  .action-icon {
+    padding: 11px;
+    box-sizing: content-box;
+    border-radius: var(--radius-sm);
+    outline-offset: -2px;
+
+    &:focus-visible {
+      outline: 2px solid var(--el-color-primary);
+    }
+  }
+
   .more-icon {
-    margin-top: 8px;
-    margin-left: 15px;
+    margin-top: 0;
+    margin-left: 4px;
   }
 }
 

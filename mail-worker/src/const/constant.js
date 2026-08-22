@@ -5,6 +5,7 @@ const constant = {
 	TOKEN_EXPIRE: 60 * 60 * 24 * 30,
 	ATTACHMENT_PREFIX: 'attachments/',
 	BACKGROUND_PREFIX: 'static/background/',
+	DEFAULT_PROJECT_LINK: 'https://github.com/maillab/cloud-mail',
 	ADMIN_ROLE: {
 		name: 'admin',
 		sendCount: 0,

@@ -77,6 +77,54 @@ describe('authentication failure rate limits', () => {
 		expect(JSON.stringify(row)).not.toContain(ip);
 	});
 
+	it('does not count registration failures caused by configuration or input validation', async () => {
+		const ip = '203.0.113.20';
+		const bodies = [];
+		for (let attempt = 0; attempt < 8; attempt += 1) {
+			bodies.push(await post('/register', 'short', ip, 'probe@example.com'));
+		}
+
+		expect(bodies.filter(body => body.code === 429)).toHaveLength(0);
+		expect(await env.db.prepare(`
+			SELECT fail_count AS failCount,
+			       in_flight AS inFlight,
+			       lock_until AS lockUntil
+			FROM auth_failure_limit
+			WHERE scope = 'register'
+		`).first()).toMatchObject({ failCount: 0, inFlight: 0, lockUntil: 0 });
+	});
+
+	it('locks registration attempts that probe whether an account already exists', async () => {
+		const ip = '203.0.113.21';
+		const existingEmail = 'existing@example.com';
+		await env.db.batch([
+			env.db.prepare(`
+				INSERT INTO user (user_id, email, type, password, salt, status, is_del)
+				VALUES (702, ?, 1, ?, ?, 0, 0)
+			`).bind(existingEmail, credentials.hash, credentials.salt),
+			env.db.prepare(`
+				INSERT INTO account (account_id, email, name, user_id, is_del)
+				VALUES (802, ?, 'Existing', 702, 0)
+			`).bind(existingEmail)
+		]);
+
+		const bodies = [];
+		for (let attempt = 0; attempt < 8; attempt += 1) {
+			bodies.push(await post('/register', 'registration-probe-password', ip, existingEmail));
+		}
+
+		expect(bodies.filter(body => body.code === 429).length).toBeGreaterThan(0);
+		const row = await env.db.prepare(`
+			SELECT fail_count AS failCount,
+			       in_flight AS inFlight,
+			       lock_until AS lockUntil
+			FROM auth_failure_limit
+			WHERE scope = 'register'
+		`).first();
+		expect(row).toMatchObject({ failCount: 5, inFlight: 0 });
+		expect(row.lockUntil).toBeGreaterThan(Math.floor(Date.now() / 1000));
+	});
+
 	it('rejects oversized authentication JSON before creating rate-limit state', async () => {
 		const body = JSON.stringify({
 			email: ADMIN_EMAIL,

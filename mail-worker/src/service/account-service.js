@@ -205,6 +205,18 @@ const accountService = {
 			.groupBy(account.userId)
 		return result;
 	},
+	// 用户管理页统计：一条 GROUP BY 查询同时给出 正常/删除 两类邮箱计数（原 2 条查询合并为 1 条）
+	async selectUserAccountStatList(c, userIds) {
+		return orm(c)
+			.select({
+				userId: account.userId,
+				isDel: account.isDel,
+				count: count(account.accountId)
+			})
+			.from(account)
+			.where(inArray(account.userId, userIds))
+			.groupBy(account.userId, account.isDel);
+	},
 
 	async countUserAccount(c, userId) {
 		const { num } = await orm(c).select({num: count()}).from(account).where(and(eq(account.userId, userId),eq(account.isDel, isDel.NORMAL))).get();

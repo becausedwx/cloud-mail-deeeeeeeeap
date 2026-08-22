@@ -14,6 +14,7 @@ import { isDel, roleConst } from '../const/entity-const';
 import email from '../entity/email';
 import userService from './user-service';
 import KvConst from '../const/kv-const';
+import constant from '../const/constant';
 import { truncateByBytes, LIKE_PATTERN_MAX_BYTES } from '../utils/sql-utils';
 import accountService from './account-service';
 import emailService from './email-service';
@@ -304,7 +305,7 @@ const publicService = {
 
 		const uuid = uuidv4();
 
-		await c.env.kv.put(KvConst.PUBLIC_KEY, uuid);
+		await c.env.kv.put(KvConst.PUBLIC_KEY, uuid, { expirationTtl: constant.TOKEN_EXPIRE });
 
 		return {token: uuid}
 	},

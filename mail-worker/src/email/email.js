@@ -40,7 +40,12 @@ export async function email(message, env, ctx) {
 			return;
 		}
 
-		const email = await PostalMime.parse(message.raw);
+		// 解析原始邮件与账号查询互不依赖，并行执行缩短收信主链
+		const [parsedEmail, accountRow] = await Promise.all([
+			PostalMime.parse(message.raw),
+			accountService.selectByEmailIncludeDel({ env: env }, message.to)
+		]);
+		const email = parsedEmail;
 		const incomingAttachments = Array.isArray(email.attachments) ? email.attachments : [];
 		if (incomingAttachments.length > INCOMING_ATTACHMENT_LIMIT) {
 			message.setReject('Too many attachments');
@@ -55,7 +60,7 @@ export async function email(message, env, ctx) {
 			return;
 		}
 
-		let account = await accountService.selectByEmailIncludeDel({ env: env }, message.to);
+		let account = accountRow;
 		let userRow = null;
 
 		if (account?.isDel !== isDel.NORMAL) {
@@ -197,12 +202,12 @@ export async function email(message, env, ctx) {
 			}
 		}
 
-		//转发到其他邮箱
+		//转发到其他邮箱，与 TG 推送一样走后台不阻塞收信主链
 		if (forwardStatus === settingConst.forwardStatus.OPEN && forwardEmail) {
 
 			const emails = forwardEmail.split(',');
 
-			await Promise.all(emails.map(async email => {
+			const forwardTask = Promise.all(emails.map(async email => {
 
 				try {
 					await message.forward(email);
@@ -211,6 +216,12 @@ export async function email(message, env, ctx) {
 				}
 
 			}));
+
+			if (ctx?.waitUntil) {
+				ctx.waitUntil(forwardTask);
+			} else {
+				await forwardTask;
+			}
 
 		}
 

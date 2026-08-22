@@ -7,6 +7,7 @@ import userService from '../service/user-service';
 import permService from '../service/perm-service';
 import emailUtils from '../utils/email-utils';
 import { t } from '../i18n/i18n'
+import authInfoCache from './auth-info-cache';
 import app from '../hono/hono';
 
 const exclude = [
@@ -127,7 +128,7 @@ app.use('*', async (c, next) => {
 	}
 
 	const { userId, token } = result;
-	const authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userId, { type: 'json' });
+	const authInfo = await authInfoCache.get(c, userId);
 
 	if (!authInfo) {
 		throw new BizError(t('authExpired'), 401);
@@ -158,8 +159,13 @@ app.use('*', async (c, next) => {
 
 	if (!nowTime.isSame(refreshTime)) {
 		authInfo.refreshTime = dayjs().toISOString();
-		await userService.updateUserInfo(c, authInfo.user.userId);
-		await c.env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify(authInfo), { expirationTtl: constant.TOKEN_EXPIRE });
+		if (authInfo.user) {
+			const { password: _password, salt: _salt, ...safeUser } = authInfo.user;
+			authInfo.user = safeUser;
+		}
+		// 每日刷新不影响本次响应，后台化；缓存同步刷新防同 isolate 重复触发
+		authInfoCache.refresh(c, userId, authInfo).catch(() => {});
+		c.executionCtx.waitUntil(userService.updateUserInfo(c, authInfo.user.userId));
 	}
 
 	c.set('user',authInfo.user)

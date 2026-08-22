@@ -47,14 +47,17 @@ function buildConditions(params, options = {}) {
 	const stale = normalizeStale(params.stale);
 	const timeSort = Number(params.timeSort) === 1;
 	const cursorEmailId = normalizeCursor(params.emailId, timeSort);
+	// type = 0 收件：发信/站内副本的 code 恒为空，加此条件不改变结果集，
+	// 但能让用户维度查询命中 idx_email_user_type_del_id 的 (user_id, type, is_del, email_id) 前缀有序扫描
 	const conditions = [
 		`e.code IS NOT NULL`,
 		`e.code != ''`,
+		`e.type = ?`,
 		`e.status != ?`,
 		`e.is_del = ?`,
 		timeSort ? `e.email_id > ?` : `e.email_id < ?`
 	];
-	const binds = [emailConst.status.SAVING, isDel.NORMAL, cursorEmailId];
+	const binds = [emailConst.type.RECEIVE, emailConst.status.SAVING, isDel.NORMAL, cursorEmailId];
 
 	if (options.userId !== undefined && options.userId !== null) {
 		conditions.push(`e.user_id = ?`);

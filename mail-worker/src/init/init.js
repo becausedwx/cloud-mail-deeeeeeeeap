@@ -20,8 +20,8 @@ const dbInit = {
 
 		const secret = c.req.header(INIT_SECRET_HEADER);
 
-		if (!await secretUtils.timingSafeEqual(secret, c.env.jwt_secret)) {
-			return c.text('JWT secret mismatch', 401);
+		if (!await secretUtils.timingSafeEqual(secret, c.env.init_secret || c.env.jwt_secret)) {
+			return c.text('Init secret mismatch', 401);
 		}
 
 		this.invalidateBootstrapStatus(c);
@@ -89,8 +89,8 @@ const dbInit = {
 
 	async createAdmin(c, params) {
 		const secret = c.req.header(INIT_SECRET_HEADER);
-		if (!await secretUtils.timingSafeEqual(secret, c.env.jwt_secret)) {
-			return c.text('JWT secret mismatch', 401);
+		if (!await secretUtils.timingSafeEqual(secret, c.env.init_secret || c.env.jwt_secret)) {
+			return c.text('Init secret mismatch', 401);
 		}
 		if (params === undefined) {
 			params = await readBoundedJson(

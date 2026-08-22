@@ -12,6 +12,25 @@ const base64urlDecode = (str) => {
 	return Uint8Array.from(atob(str), c => c.charCodeAt(0));
 };
 
+// importKey 按密钥缓存：同一 isolate 内每个认证请求都重复导入同一个 secret 是纯浪费
+const keyCache = new Map();
+
+async function getHmacKey(secret, usage) {
+	const cacheKey = secret + ':' + usage;
+	let key = keyCache.get(cacheKey);
+	if (!key) {
+		key = await crypto.subtle.importKey(
+			'raw',
+			encoder.encode(secret),
+			{ name: 'HMAC', hash: 'SHA-256' },
+			false,
+			[usage]
+		);
+		keyCache.set(cacheKey, key);
+	}
+	return key;
+}
+
 const jwtUtils = {
 	async generateToken(c, payload, expiresInSeconds) {
 		const header = {
@@ -32,13 +51,7 @@ const jwtUtils = {
 		const payloadStr = base64url(encoder.encode(JSON.stringify(fullPayload)));
 		const data = `${headerStr}.${payloadStr}`;
 
-		const key = await crypto.subtle.importKey(
-			'raw',
-			encoder.encode(c.env.jwt_secret),
-			{ name: 'HMAC', hash: 'SHA-256' },
-			false,
-			['sign']
-		);
+		const key = await getHmacKey(c.env.jwt_secret, 'sign');
 
 		const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
 		const signatureStr = base64url(signature);
@@ -57,13 +70,7 @@ const jwtUtils = {
 			if (!headerB64 || !payloadB64 || !signatureB64) return null;
 
 			const data = `${headerB64}.${payloadB64}`;
-			const key = await crypto.subtle.importKey(
-				'raw',
-				encoder.encode(c.env.jwt_secret),
-				{ name: 'HMAC', hash: 'SHA-256' },
-				false,
-				['verify']
-			);
+			const key = await getHmacKey(c.env.jwt_secret, 'verify');
 
 			const valid = await crypto.subtle.verify(
 				'HMAC',

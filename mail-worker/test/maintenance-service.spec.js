@@ -23,7 +23,15 @@ vi.mock('../src/init/init', () => ({
 vi.mock('../src/service/delivery-attempt-service', () => ({
 	default: {
 		health: vi.fn(),
-		reconcile: vi.fn()
+		reconcile: vi.fn(),
+		resolveUnknown: vi.fn()
+	}
+}));
+
+vi.mock('../src/service/email-service', () => ({
+	RECEIVE_RECOVERY_EMAIL_LIMIT: 2,
+	default: {
+		completeReceiveAll: vi.fn()
 	}
 }));
 
@@ -36,6 +44,7 @@ vi.mock('../src/service/email-search-service', () => ({
 const { dbInit } = await import('../src/init/init');
 const { default: emailSearchService } = await import('../src/service/email-search-service');
 const { default: deliveryAttemptService } = await import('../src/service/delivery-attempt-service');
+const { default: emailService } = await import('../src/service/email-service');
 const { default: maintenanceService } = await import('../src/service/maintenance-service');
 
 function createMaintenanceDb(selectBatches = []) {
@@ -343,6 +352,68 @@ describe('maintenance service', () => {
 			repaired: 2,
 			unknown: 1,
 			failed: 1
+		});
+	});
+
+	it('drains stuck inbound emails through the receive-recover action', async () => {
+		const c = { env: { db: { prepare: vi.fn() } } };
+		const countSpy = vi.spyOn(maintenanceService, 'countPendingReceive')
+			.mockResolvedValueOnce(5)
+			.mockResolvedValueOnce(2);
+		emailService.completeReceiveAll.mockResolvedValue({ scanned: 2, resolved: 1, batch: 2 });
+		vi.spyOn(maintenanceService, 'health').mockResolvedValue({ ok: true });
+
+		const result = await maintenanceService.repair(c, 'receive-recover');
+
+		expect(emailService.completeReceiveAll).toHaveBeenCalledWith(c);
+		expect(countSpy).toHaveBeenCalledTimes(2);
+		expect(result.lastAction).toEqual({
+			action: 'receive-recover',
+			batch: 2,
+			scanned: 2,
+			resolved: 1,
+			before: 5,
+			after: 2
+		});
+	});
+
+	it('acknowledges UNKNOWN delivery attempts through the manual ack action', async () => {
+		const c = { env: { db: { prepare: vi.fn() } } };
+		deliveryAttemptService.resolveUnknown.mockResolvedValue({
+			outcome: 'accepted',
+			scanned: 3,
+			resolved: 3
+		});
+		vi.spyOn(maintenanceService, 'health').mockResolvedValue({ ok: true });
+
+		const result = await maintenanceService.repair(c, 'delivery-ack-unknown');
+
+		expect(deliveryAttemptService.resolveUnknown).toHaveBeenCalledWith(c, { outcome: 'accepted' });
+		expect(result.lastAction).toEqual({
+			action: 'delivery-ack-unknown',
+			outcome: 'accepted',
+			scanned: 3,
+			resolved: 3
+		});
+	});
+
+	it('fails UNKNOWN delivery attempts through the manual fail action', async () => {
+		const c = { env: { db: { prepare: vi.fn() } } };
+		deliveryAttemptService.resolveUnknown.mockResolvedValue({
+			outcome: 'failed',
+			scanned: 2,
+			resolved: 1
+		});
+		vi.spyOn(maintenanceService, 'health').mockResolvedValue({ ok: true });
+
+		const result = await maintenanceService.repair(c, 'delivery-fail-unknown');
+
+		expect(deliveryAttemptService.resolveUnknown).toHaveBeenCalledWith(c, { outcome: 'failed' });
+		expect(result.lastAction).toEqual({
+			action: 'delivery-fail-unknown',
+			outcome: 'failed',
+			scanned: 2,
+			resolved: 1
 		});
 	});
 

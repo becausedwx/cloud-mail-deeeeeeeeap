@@ -505,6 +505,72 @@ describe('LinuxDo OAuth state and PKCE security', () => {
 		`).first()).toMatchObject({ userId: 0 });
 	});
 
+	it('rejects OAuth binding for a new email when registration is closed', async () => {
+		const c = context();
+		await env.db.prepare(`
+			UPDATE setting
+			SET register = 1, reg_key = 1, register_verify = 1
+		`).run();
+		await settingService.refresh(c);
+		roleService.clearCache();
+		await oauthService.saveUser(c, {
+			oauthUserId: 'reg-closed-user',
+			username: 'reg-closed-user',
+			name: 'Reg Closed User',
+			active: 0,
+			trustLevel: 1,
+			silenced: 0
+		});
+		const bindToken = await oauthService.issueBindToken(c, 'reg-closed-user');
+
+		await expect(oauthService.bindUser(c, {
+			email: 'closed-reg@example.com',
+			bindToken
+		})).rejects.toMatchObject({ name: 'BizError', code: 501 });
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM user').first())
+			.toMatchObject({ count: 0 });
+		expect(await env.db.prepare(`
+			SELECT user_id AS userId FROM oauth WHERE oauth_user_id = 'reg-closed-user'
+		`).first()).toMatchObject({ userId: 0 });
+
+		await env.db.prepare('UPDATE setting SET register = 0').run();
+		await settingService.refresh(c);
+	});
+
+	it('keeps the legacy OAuth auto-register behavior behind oauth_auto_register', async () => {
+		const c = context();
+		c.env.oauth_auto_register = 'true';
+		await env.db.prepare(`
+			UPDATE setting
+			SET register = 1, reg_key = 1, register_verify = 1
+		`).run();
+		await settingService.refresh(c);
+		roleService.clearCache();
+		await oauthService.saveUser(c, {
+			oauthUserId: 'auto-reg-user',
+			username: 'auto-reg-user',
+			name: 'Auto Reg User',
+			active: 0,
+			trustLevel: 1,
+			silenced: 0
+		});
+		const bindToken = await oauthService.issueBindToken(c, 'auto-reg-user');
+
+		await oauthService.bindUser(c, {
+			email: 'auto-reg@example.com',
+			bindToken
+		});
+		expect(await env.db.prepare('SELECT COUNT(*) AS count FROM user').first())
+			.toMatchObject({ count: 1 });
+		const bound = await env.db.prepare(`
+			SELECT user_id AS userId FROM oauth WHERE oauth_user_id = 'auto-reg-user'
+		`).first();
+		expect(bound.userId).toBeGreaterThan(0);
+
+		await env.db.prepare('UPDATE setting SET register = 0').run();
+		await settingService.refresh(c);
+	});
+
 	it('keeps active bind flows while removing expired state and stale unbound identities', async () => {
 		const c = context();
 		await oauthService.saveUser(c, {

@@ -490,7 +490,9 @@ describe('incoming attachment recovery', () => {
 			return true;
 		});
 
-		await expect(emailService.completeReceiveAll({ env })).resolves.toBeUndefined();
+		// 抢到两行但只有一行离开 SAVING：被别的 runner 改掉的那封不计入 resolved
+		await expect(emailService.completeReceiveAll({ env }))
+			.resolves.toMatchObject({ scanned: 2, resolved: 1 });
 
 		const rows = await env.db.prepare(`
 			SELECT email_id AS emailId, status, is_del AS isDel

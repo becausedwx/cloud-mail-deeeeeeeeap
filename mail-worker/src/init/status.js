@@ -1,4 +1,5 @@
 import { isDel, userConst } from '../const/entity-const';
+import constant from '../const/constant';
 
 const REQUIRED_TABLES = [
 	'email_search',
@@ -111,7 +112,7 @@ function cacheKeyFor(c, version) {
 		admin,
 		!!env.kv,
 		!!env.assets,
-		hasText(env.jwt_secret)
+		hasText(env.init_secret) || hasText(env.jwt_secret)
 	]);
 }
 
@@ -140,7 +141,7 @@ async function computeBootstrapStatus(c) {
 	const configuration = {
 		domain: hasDomainConfig(c.env?.domain),
 		admin: hasText(c.env?.admin),
-		initSecret: hasText(c.env?.jwt_secret)
+		initSecret: hasText(c.env?.init_secret) || hasText(c.env?.jwt_secret)
 	};
 
 	let initialized = false;
@@ -349,6 +350,6 @@ export function createBootstrapWebsiteConfig(status) {
 		linuxdoCallbackUrl: '',
 		linuxdoSwitch: false,
 		minEmailPrefix: 1,
-		projectLink: true
+		projectLink: constant.DEFAULT_PROJECT_LINK
 	};
 }

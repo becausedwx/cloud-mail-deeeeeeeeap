@@ -7,6 +7,7 @@ import { extractCodeByPattern } from './ai-service';
 import { CODE_STALE_MINUTES } from './code-service';
 import { chunkArray, runBatch } from '../utils/sql-utils';
 import deliveryAttemptService from './delivery-attempt-service';
+import emailService, { RECEIVE_RECOVERY_EMAIL_LIMIT } from './email-service';
 
 const EXPECTED_EMAIL_COLUMNS = [
 	'email_id',
@@ -441,6 +442,29 @@ const maintenanceService = {
 			});
 		}
 
+		if (action === 'receive-recover') {
+			const pendingBefore = await this.countPendingReceive(c);
+			const recoverResult = await emailService.completeReceiveAll(c);
+			const pendingAfter = await this.countPendingReceive(c);
+			return this.withMaintenanceResult(c, {
+				action: 'receive-recover',
+				batch: recoverResult?.batch ?? RECEIVE_RECOVERY_EMAIL_LIMIT,
+				scanned: recoverResult?.scanned ?? 0,
+				resolved: recoverResult?.resolved ?? 0,
+				before: pendingBefore,
+				after: pendingAfter
+			});
+		}
+
+		if (action === 'delivery-ack-unknown' || action === 'delivery-fail-unknown') {
+			const outcome = action === 'delivery-ack-unknown' ? 'accepted' : 'failed';
+			const resolveResult = await deliveryAttemptService.resolveUnknown(c, { outcome });
+			return this.withMaintenanceResult(c, {
+				action,
+				...resolveResult
+			});
+		}
+
 		if (action === 'search') {
 			await dbInit.runOptionalSqlList(c, SEARCH_TABLE_SQL_LIST);
 			await c.env.db.prepare(`DELETE FROM email_search`).run();
@@ -481,6 +505,17 @@ const maintenanceService = {
 		}
 
 		throw new BizError('Unknown maintenance action', 400);
+	},
+
+	async countPendingReceive(c) {
+		const row = await c.env.db.prepare(`
+			SELECT COUNT(*) AS pending
+			FROM email
+			WHERE status = ? AND type = ?
+			  AND create_time <= datetime('now', '-10 minutes')
+			  AND (recovery_after IS NULL OR recovery_after <= CURRENT_TIMESTAMP)
+		`).bind(emailConst.status.SAVING, emailConst.type.RECEIVE).first();
+		return Number(row?.pending || 0);
 	},
 
 	async withMaintenanceResult(c, result) {

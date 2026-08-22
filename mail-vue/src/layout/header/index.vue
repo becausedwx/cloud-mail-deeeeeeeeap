@@ -404,7 +404,7 @@ function formatName(email) {
     height: 34px;
     border-radius: 50%;
     color: #ffffff;
-    background: linear-gradient(135deg, #1890ff, #3a80dd);
+    background: var(--brand-gradient);
     transition: box-shadow var(--transition-base), transform var(--transition-base);
     display: flex;
     align-items: center;

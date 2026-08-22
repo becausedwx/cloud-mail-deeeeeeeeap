@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import constant from '../src/const/constant';
 import KvConst from '../src/const/kv-const';
+// 静态导入：动态 import 会把整条服务依赖图的加载时间算进单个用例的超时窗口，
+// 多文件连跑时曾导致这里偶发 5s 超时，并连带污染下一个用例的 mockRejectedValueOnce
+import loginService from '../src/service/login-service';
 
 const mocks = vi.hoisted(() => ({
 	getToken: vi.fn(),
@@ -75,7 +78,6 @@ describe('login service logout', () => {
 	});
 
 	it('keeps at most ten sessions when logging in', async () => {
-		const { default: loginService } = await import('../src/service/login-service');
 		const existingTokens = Array.from({ length: 10 }, (_, index) => `session-${index}`);
 		const put = vi.fn(async () => {});
 		const c = {
@@ -99,7 +101,6 @@ describe('login service logout', () => {
 	});
 
 	it('does not issue a token after the authentication reservation becomes stale', async () => {
-		const { default: loginService } = await import('../src/service/login-service');
 		mocks.clearRateLimit.mockRejectedValueOnce(Object.assign(new Error('stale reservation'), {
 			code: 429
 		}));
@@ -120,7 +121,6 @@ describe('login service logout', () => {
 	});
 
 	it('removes only the current session and keeps the remaining sessions expiring', async () => {
-		const { default: loginService } = await import('../src/service/login-service');
 		const authInfo = {
 			tokens: ['older-session', 'current-session', 'newer-session'],
 			user: { userId: 7, email: 'user@example.com' },
@@ -154,7 +154,6 @@ describe('login service logout', () => {
 	});
 
 	it('deletes the auth key when the current session is the last session', async () => {
-		const { default: loginService } = await import('../src/service/login-service');
 		const put = vi.fn(async () => {});
 		const del = vi.fn(async () => {});
 		const c = {
@@ -179,7 +178,6 @@ describe('login service logout', () => {
 	});
 
 	it('treats an already missing auth key as an idempotent logout', async () => {
-		const { default: loginService } = await import('../src/service/login-service');
 		const put = vi.fn(async () => {});
 		const del = vi.fn(async () => {});
 		const c = {
@@ -200,7 +198,6 @@ describe('login service logout', () => {
 	});
 
 	it('does not remove another session when the current token is already absent', async () => {
-		const { default: loginService } = await import('../src/service/login-service');
 		const authInfo = {
 			tokens: ['session-a', 'session-b'],
 			user: { userId: 7, email: 'user@example.com' }

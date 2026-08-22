@@ -1,6 +1,6 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 
-const state = vi.hoisted(() => ({selectCalls: 0}));
+const state = vi.hoisted(() => ({selectCalls: 0, batchCalls: 0, batchResults: []}));
 
 vi.mock('../src/entity/orm', () => ({
 	default: vi.fn(() => ({
@@ -16,6 +16,10 @@ vi.mock('../src/entity/orm', () => ({
 				async get() { return null; }
 			};
 			return builder;
+		},
+		async batch(stmts) {
+			state.batchCalls++;
+			return stmts.map(() => state.batchResults.length ? state.batchResults.shift() : []);
 		}
 	}))
 }));
@@ -41,6 +45,8 @@ const {default: emailService} = await import('../src/service/email-service');
 describe('continuation list query budget', () => {
 	beforeEach(() => {
 		state.selectCalls = 0;
+		state.batchCalls = 0;
+		state.batchResults = [];
 	});
 
 	it('skips total and latest queries for a normal continuation page', async () => {
@@ -70,11 +76,13 @@ describe('continuation list query budget', () => {
 			withLatest: 0
 		});
 
+		expect(state.batchCalls).toBe(1);
 		expect(state.selectCalls).toBe(1);
 		expect(result).toEqual({list: [], total: 0, hasMore: false});
 	});
 
 	it('keeps the existing latestEmail contract when withLatest is omitted', async () => {
+		state.batchResults = [[], null];
 		const result = await emailService.list({env: {}}, {
 			emailId: 100,
 			type: 0,
@@ -86,7 +94,8 @@ describe('continuation list query budget', () => {
 			withTotal: 0
 		}, 7);
 
-		expect(state.selectCalls).toBe(2);
+		// 首屏语义：list+latest 合并进同一次 batch，仍是 1 次往返
+		expect(state.batchCalls).toBe(1);
 		expect(result.latestEmail).toEqual({emailId: 0, accountId: 1, userId: 7});
 	});
 });

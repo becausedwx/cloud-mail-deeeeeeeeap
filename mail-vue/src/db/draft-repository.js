@@ -123,3 +123,11 @@ export async function listDraftPage(database, {cursor = 0, size = 50} = {}) {
     hasMore
   }
 }
+
+// 用户在设置页主动清空本地草稿（保留数据库本身，注销流程不会调用此函数）
+export async function clearAllDrafts(database) {
+  return database.transaction('rw', database.draft, database.att, async () => {
+    await database.draft.clear()
+    await database.att.clear()
+  })
+}

@@ -42,6 +42,13 @@ function lockedError() {
 	return new BizError(t('authTooManyFailures'), 429);
 }
 
+// 标记「疑似枚举或爆破」的失败。只有带此标记的失败计入失败次数，
+// 配置与参数校验类失败一并计数会把正常访客锁在门外
+export function markAuthAbuse(error) {
+	error.authAbuse = true;
+	return error;
+}
+
 const authRateLimitService = {
 	async assertAllowed(c, scope, account) {
 		const hash = await identityHash(c, scope, account);
@@ -193,6 +200,30 @@ const authRateLimitService = {
 		if (Number(row?.lockUntil || 0) > now) {
 			throw lockedError();
 		}
+	},
+
+	// 归还并发名额但不计失败，也不清空既有失败次数：
+	// 用 clear 归还会让攻击者靠一次无害失败抹掉之前的计数
+	async releaseReservation(c, identity) {
+		const now = Math.floor(Date.now() / 1000);
+		await c.env.db.prepare(`
+			UPDATE auth_failure_limit
+			SET in_flight = in_flight - 1,
+				in_flight_started_at = CASE
+					WHEN in_flight <= 1 THEN 0
+					ELSE in_flight_started_at
+				END,
+				updated_at = ?
+			WHERE scope = ?
+			  AND identity_hash = ?
+			  AND reservation_generation = ?
+			  AND in_flight > 0
+		`).bind(
+			now,
+			identity.scope,
+			identity.identityHash,
+			identity.reservationGeneration
+		).run();
 	},
 
 	async clear(c, identity) {

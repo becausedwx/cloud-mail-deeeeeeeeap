@@ -58,6 +58,15 @@
           <el-button type="warning" plain :loading="repairing === 'delivery-reconcile'" @click="repair('delivery-reconcile')">
             {{ $t('reconcileDelivery') }}
           </el-button>
+          <el-button type="warning" plain :loading="repairing === 'receive-recover'" @click="repair('receive-recover')">
+            {{ $t('recoverReceive') }}
+          </el-button>
+          <el-button type="danger" plain :loading="repairing === 'delivery-ack-unknown'" @click="repair('delivery-ack-unknown')">
+            {{ $t('ackUnknownDelivery') }}
+          </el-button>
+          <el-button type="danger" plain :loading="repairing === 'delivery-fail-unknown'" @click="repair('delivery-fail-unknown')">
+            {{ $t('failUnknownDelivery') }}
+          </el-button>
           <el-button type="warning" plain :loading="repairing === 'search'" @click="repair('search')">
             {{ $t('rebuildSearch') }}
           </el-button>
@@ -161,6 +170,9 @@ function repair(action) {
 }
 
 function repairConfirmText(action) {
+  if (action === 'delivery-ack-unknown' || action === 'delivery-fail-unknown') {
+    return t('unknownDeliveryConfirm')
+  }
   if (action === 'codes-clear-stale') {
     return t('clearStaleCodesConfirm')
   }
@@ -177,6 +189,12 @@ function actionResultText(result) {
   }
   if (result.action === 'codes-rescan' || result.action === 'codes-clean') {
     return t('codeMaintenanceResult', result)
+  }
+  if (result.action === 'delivery-ack-unknown' || result.action === 'delivery-fail-unknown') {
+    return t('unknownDeliveryResult', result)
+  }
+  if (result.action === 'receive-recover') {
+    return t('receiveRecoverResult', result)
   }
   if (result.action === 'delivery-reconcile') {
     return t('deliveryReconcileResult', result)

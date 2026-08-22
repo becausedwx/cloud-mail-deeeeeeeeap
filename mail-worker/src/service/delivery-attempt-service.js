@@ -134,6 +134,15 @@ const deliveryAttemptService = {
 		});
 	},
 
+	async markPreparationFailed(c, attemptId, errorSummary = 'LOCAL_PREPARATION_FAILED') {
+		return await transition(c, {
+			attemptId,
+			fromStatus: deliveryAttemptConst.status.PREPARED,
+			toStatus: deliveryAttemptConst.status.FAILED,
+			errorSummary
+		});
+	},
+
 	async markUnknown(c, attemptId, errorSummary = 'PROVIDER_CALL_UNCERTAIN') {
 		return await transition(c, {
 			attemptId,
@@ -378,6 +387,68 @@ const deliveryAttemptService = {
 				changedEmailIds.add(attempt.emailId);
 			}
 		}
+		// 有 webhook 证据的 UNKNOWN 自动收敛：邮件状态已被回调推进（非 SAVING/FAILED），
+		// 或已记录 provider message id，说明供应商实际接受过这次投递。
+		const unknownBudget = Math.max(0, batchLimit - staleAttempts.length - attempts.length);
+		let unknownAttempts = [];
+		if (unknownBudget > 0) {
+			const result = await c.env.db.prepare(`
+				SELECT
+					da.attempt_id AS attemptId,
+					da.email_id AS emailId,
+					da.provider,
+					da.provider_message_id AS providerMessageId,
+					e.status AS emailStatus,
+					e.resend_email_id AS emailProviderMessageId
+				FROM delivery_attempt da
+				JOIN email e ON e.email_id = da.email_id AND e.type = ?
+				WHERE da.status = ?
+				  AND (e.status NOT IN (?, ?) OR e.resend_email_id IS NOT NULL)
+				ORDER BY da.attempt_id
+				LIMIT ${unknownBudget}
+			`).bind(
+				emailConst.type.SEND,
+				deliveryAttemptConst.status.UNKNOWN,
+				emailConst.status.SAVING,
+				emailConst.status.FAILED
+			).all();
+			unknownAttempts = result.results || [];
+		}
+
+		for (const attempt of unknownAttempts) {
+			const evidenceMessageId = attempt.providerMessageId || attempt.emailProviderMessageId || null;
+			const transitionResult = await c.env.db.prepare(`
+				UPDATE delivery_attempt
+				SET status = ?, provider_message_id = ?, error_summary = NULL, update_time = CURRENT_TIMESTAMP
+				WHERE attempt_id = ? AND status = ?
+			`).bind(
+				deliveryAttemptConst.status.ACCEPTED,
+				evidenceMessageId,
+				attempt.attemptId,
+				deliveryAttemptConst.status.UNKNOWN
+			).run();
+			if (Number(transitionResult?.meta?.changes || 0) !== 1) {
+				continue;
+			}
+			repaired += 1;
+			changedEmailIds.add(attempt.emailId);
+			if (Number(attempt.emailStatus) === emailConst.status.SAVING) {
+				const evidenceTarget = attempt.provider === deliveryAttemptConst.provider.CLOUDFLARE_EMAIL
+					? emailConst.status.DELIVERED
+					: emailConst.status.SENT;
+				await c.env.db.prepare(`
+					UPDATE email
+					SET status = ?, message = NULL
+					WHERE email_id = ? AND type = ? AND status = ?
+				`).bind(
+					evidenceTarget,
+					attempt.emailId,
+					emailConst.type.SEND,
+					emailConst.status.SAVING
+				).run();
+			}
+		}
+
 		if (changedEmailIds.size > 0) {
 			try {
 				await emailSearchService.syncEmailIds(c, [...changedEmailIds]);
@@ -387,11 +458,106 @@ const deliveryAttemptService = {
 		}
 
 		return {
-			scanned: staleAttempts.length + attempts.length,
+			scanned: staleAttempts.length + attempts.length + unknownAttempts.length,
 			repaired,
 			unknown,
 			failed
 		};
+	},
+
+	// 管理员人工判定：把 UNKNOWN 投递统一改为已发（accepted）或失败（failed）。
+	// 只在管理员已于供应商后台核实真实结果后使用；判为失败后发件人可重发。
+	async resolveUnknown(c, { outcome, limit = 50 } = {}) {
+		if (outcome !== 'accepted' && outcome !== 'failed') {
+			throw new BizError('Invalid unknown-delivery outcome', 400);
+		}
+		const batchLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
+		const { results: attempts = [] } = await c.env.db.prepare(`
+			SELECT
+				da.attempt_id AS attemptId,
+				da.email_id AS emailId,
+				da.provider,
+				da.provider_message_id AS providerMessageId,
+				e.status AS emailStatus
+			FROM delivery_attempt da
+			LEFT JOIN email e ON e.email_id = da.email_id AND e.type = ?
+			WHERE da.status = ?
+			ORDER BY da.attempt_id
+			LIMIT ${batchLimit}
+		`).bind(
+			emailConst.type.SEND,
+			deliveryAttemptConst.status.UNKNOWN
+		).all();
+
+		let resolved = 0;
+		const changedEmailIds = new Set();
+		for (const attempt of attempts) {
+			const toStatus = outcome === 'accepted'
+				? deliveryAttemptConst.status.ACCEPTED
+				: deliveryAttemptConst.status.FAILED;
+			const errorSummary = outcome === 'accepted' ? 'MANUALLY_MARKED_ACCEPTED' : 'MANUALLY_MARKED_FAILED';
+			const result = await c.env.db.prepare(`
+				UPDATE delivery_attempt
+				SET status = ?, error_summary = ?, update_time = CURRENT_TIMESTAMP
+				WHERE attempt_id = ? AND status = ?
+			`).bind(
+				toStatus,
+				errorSummary,
+				attempt.attemptId,
+				deliveryAttemptConst.status.UNKNOWN
+			).run();
+			if (Number(result?.meta?.changes || 0) !== 1) {
+				continue;
+			}
+			resolved += 1;
+			if (Number(attempt.emailStatus) !== emailConst.status.SAVING) {
+				continue;
+			}
+			if (outcome === 'accepted') {
+				const targetStatus = attempt.provider === deliveryAttemptConst.provider.CLOUDFLARE_EMAIL
+					? emailConst.status.DELIVERED
+					: emailConst.status.SENT;
+				const emailResult = await c.env.db.prepare(`
+					UPDATE email
+					SET status = ?, resend_email_id = COALESCE(?, resend_email_id), message = ?
+					WHERE email_id = ? AND type = ? AND status = ?
+				`).bind(
+					targetStatus,
+					attempt.providerMessageId,
+					'MANUALLY_MARKED_ACCEPTED',
+					attempt.emailId,
+					emailConst.type.SEND,
+					emailConst.status.SAVING
+				).run();
+				if (Number(emailResult?.meta?.changes || 0) === 1) {
+					changedEmailIds.add(attempt.emailId);
+				}
+			} else {
+				const emailResult = await c.env.db.prepare(`
+					UPDATE email
+					SET status = ?, message = ?
+					WHERE email_id = ? AND type = ? AND status = ?
+				`).bind(
+					emailConst.status.FAILED,
+					'DELIVERY_MANUALLY_MARKED_FAILED',
+					attempt.emailId,
+					emailConst.type.SEND,
+					emailConst.status.SAVING
+				).run();
+				if (Number(emailResult?.meta?.changes || 0) === 1) {
+					changedEmailIds.add(attempt.emailId);
+				}
+			}
+		}
+		if (changedEmailIds.size > 0) {
+			try {
+				await emailSearchService.syncEmailIds(c, [...changedEmailIds]);
+			} catch {
+				// The authoritative email rows are updated; search can be rebuilt separately.
+			}
+		}
+
+		return { outcome, scanned: attempts.length, resolved };
 	}
 };
 

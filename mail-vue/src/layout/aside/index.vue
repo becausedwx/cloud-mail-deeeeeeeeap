@@ -104,7 +104,7 @@ const route = useRoute();
   justify-content: center;
   gap: 5px;
   color: #ffffff;
-  background: linear-gradient(135deg, #1890ff, #3a80dd);
+  background: var(--brand-gradient);
   transition: all 0.3s ease;
   max-width: 240px;
   padding: 0 10px;

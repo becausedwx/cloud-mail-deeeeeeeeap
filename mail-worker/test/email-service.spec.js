@@ -159,6 +159,9 @@ vi.mock('../src/service/delivery-attempt-service', () => ({
 		markFailed: vi.fn(async () => {
 			mockState.operationLog.push({ type: 'attempt-failed' });
 		}),
+		markPreparationFailed: vi.fn(async () => {
+			mockState.operationLog.push({ type: 'attempt-preparation-failed' });
+		}),
 		markUnknown: vi.fn(async () => {
 			mockState.operationLog.push({ type: 'attempt-unknown' });
 		})
@@ -702,6 +705,46 @@ describe('email service status synchronization', () => {
 		expect(deliveryAttemptService.prepare).toHaveBeenCalledOnce();
 		expect(sendMock).not.toHaveBeenCalled();
 		expect(deliveryAttemptService.markAccepted).not.toHaveBeenCalled();
+	});
+
+	it('marks a local attachment preparation failure as FAILED before any provider call', async () => {
+		const sendMock = vi.fn(async () => ({ messageId: 'unused' }));
+		const preparationSpy = vi.spyOn(emailService, 'toCloudflareAttachments')
+			.mockRejectedValue(new Error('broken base64 attachment'));
+		const c = {
+			env: {
+				admin: 'admin@example.com',
+				email: { send: sendMock },
+				kv: {
+					get: vi.fn(async () => null),
+					put: vi.fn(async () => {})
+				}
+			}
+		};
+
+		try {
+			await expect(emailService.send(c, {
+				accountId: 1,
+				name: 'Sender',
+				sendType: 'new',
+				receiveEmail: ['to@external.example.com'],
+				text: 'Hello',
+				content: '<p>Hello</p>',
+				subject: 'Hello'
+			}, 1)).rejects.toThrow('broken base64 attachment');
+
+			const operationTypes = mockState.operationLog.map(operation => operation.type);
+			expect(operationTypes).toContain('attempt-preparation-failed');
+			expect(operationTypes).not.toContain('attempt-in-flight');
+			expect(operationTypes).not.toContain('attempt-unknown');
+			expect(sendMock).not.toHaveBeenCalled();
+			expect(mockState.updates.at(-1)).toMatchObject({
+				status: emailConst.status.FAILED,
+				message: 'LOCAL_PREPARATION_FAILED'
+			});
+		} finally {
+			preparationSpy.mockRestore();
+		}
 	});
 
 	it('records an UNKNOWN attempt instead of FAILED when the provider call outcome is ambiguous', async () => {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   cleanupOrphanDraftAttachments,
+  clearAllDrafts,
   deleteDrafts,
   getDraftAttachments,
   getDraftForEditing,
@@ -64,6 +65,10 @@ function createMemoryDraftDb() {
       async bulkDelete(keys) {
         if (db.failOn === `${name}.bulkDelete`) throw new Error(`injected ${name}.bulkDelete failure`)
         keys.forEach(key => db.state[name].delete(key))
+      },
+      async clear() {
+        if (db.failOn === `${name}.clear`) throw new Error(`injected ${name}.clear failure`)
+        db.state[name].clear()
       },
       async get(key) {
         return structuredClone(db.state[name].get(key))
@@ -283,4 +288,28 @@ test('draft pagination handles empty, one-row and exact-page boundaries', async 
     assert.equal(page.list.length, count)
     assert.equal(page.hasMore, false)
   }
+})
+
+test('clearing all drafts empties both tables in one transaction', async () => {
+  const db = createMemoryDraftDb()
+  await saveDraft(db, { subject: 'one', content: 'a', attachments: [{ name: 'f1' }] })
+  await saveDraft(db, { subject: 'two', content: 'b', attachments: [] })
+  assert.equal(db.state.draft.size, 2)
+  assert.equal(db.state.att.size, 2)
+
+  await clearAllDrafts(db)
+
+  assert.equal(db.state.draft.size, 0)
+  assert.equal(db.state.att.size, 0)
+})
+
+test('clearing all drafts rolls back when the attachment table cannot be cleared', async () => {
+  const db = createMemoryDraftDb()
+  await saveDraft(db, { subject: 'keep', content: 'c', attachments: [{ name: 'f2' }] })
+  db.failOn = 'att.clear'
+
+  await assert.rejects(() => clearAllDrafts(db), /injected att.clear failure/)
+
+  assert.equal(db.state.draft.size, 1)
+  assert.equal(db.state.att.size, 1)
 })

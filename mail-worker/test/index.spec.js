@@ -12,7 +12,7 @@ describe('cloud-mail worker', () => {
 		const response = await worker.fetch(request, env, ctx);
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(401);
-		expect(await response.text()).toContain('JWT secret mismatch');
+		expect(await response.text()).toContain('Init secret mismatch');
 	});
 
 	it('routes API requests through the worker (integration style)', async () => {
@@ -21,6 +21,6 @@ describe('cloud-mail worker', () => {
 			headers: { 'X-Cloud-Mail-Init-Secret': 'wrong-secret' }
 		});
 		expect(response.status).toBe(401);
-		expect(await response.text()).toContain('JWT secret mismatch');
+		expect(await response.text()).toContain('Init secret mismatch');
 	});
 });
