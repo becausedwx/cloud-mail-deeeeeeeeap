@@ -343,8 +343,6 @@ const ja = {
     sendBanned: '無効',
     sendInternal: 'サイト内のみ',
     wrote: 'からのメール',
-    support: '支援',
-    supportDesc: 'ミルクティーをおごってください',
     featDesc: '機能説明',
     emailInterception: 'メール遮断',
     emailInterceptionDesc: 'メールアドレスまたはドメインを入力してメールを遮断します。特定サイトからの受信を禁止でき、* を入力するとすべて遮断します',

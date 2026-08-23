@@ -343,8 +343,6 @@ const zhTw = {
     sendBanned: '已停用',
     sendInternal: '僅站內',
     wrote: '來信',
-    support: '捐助',
-    supportDesc: '請我喝杯奶茶',
     featDesc: '功能說明',
     emailInterception: '郵件攔截',
     emailInterceptionDesc: '輸入信箱或網域攔截郵件，可用於禁止使用者接收某些網站的郵件，輸入*攔截所有',

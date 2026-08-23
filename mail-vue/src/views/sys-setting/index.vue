@@ -400,7 +400,7 @@
               <div class="concerning-item">
                 <span>{{ $t('version') }} :</span>
                 <el-badge is-dot :hidden="!hasUpdate">
-                  <el-button @click="jump('https://github.com/maillab/cloud-mail/releases')">
+                  <el-button @click="jump(projectRepo + '/releases')">
                     {{ currentVersion }}
                     <template #icon>
                       <Icon icon="qlementine-icons:version-control-16" style="font-size: 20px" color="#1890FF"/>
@@ -411,32 +411,17 @@
               <div class="concerning-item">
                 <span>{{ $t('community') }} : </span>
                 <div class="community">
-                  <el-button @click="jump('https://github.com/maillab/cloud-mail')">
+                  <el-button @click="jump(projectRepo)">
                     Github
                     <template #icon>
                       <Icon icon="codicon:github-inverted" width="22" height="22"/>
                     </template>
                   </el-button>
-                  <el-button @click="jump('https://t.me/cloud_mail_tg')">
-                    Telegram
-                    <template #icon>
-                      <Icon icon="logos:telegram" width="30" height="30"/>
-                    </template>
-                  </el-button>
                 </div>
               </div>
               <div class="concerning-item">
-                <span>{{ $t('support') }} : </span>
-                <el-button @click="jump('https://doc.skymail.ink/support.html')">
-                  {{ t('supportDesc') }}
-                  <template #icon>
-                    <Icon color="#79D6B5" icon="simple-icons:buymeacoffee" width="20" height="20"/>
-                  </template>
-                </el-button>
-              </div>
-              <div class="concerning-item">
                 <span>{{ $t('help') }} : </span>
-                <el-button @click="jump('https://doc.skymail.ink')">
+                <el-button @click="jump(projectRepo + '#readme')">
                   {{ t('document') }}
                   <template #icon>
                     <Icon color="#79D6B5" icon="fluent-color:document-32" width="18" height="18"/>
@@ -848,7 +833,10 @@ defineOptions({
   name: 'sys-setting'
 })
 
-const currentVersion = 'v3.0.0'
+// 本项目自 3.0.0 从上游分叉后独立维护，版本号另起一条线，不跟随上游编号
+const currentVersion = 'v1.0.0'
+const projectRepo = 'https://github.com/deeeeeeeeap/cloud-mail-deeeeeeeeap'
+const releaseApi = 'https://api.github.com/repos/deeeeeeeeap/cloud-mail-deeeeeeeeap/releases/latest'
 const hasUpdate = ref(false)
 let getUpdateErrorCount = 1;
 const {t, locale} = useI18n();
@@ -1046,10 +1034,18 @@ const resendList = computed(() => {
 
 function getUpdate() {
   if (getUpdateErrorCount > 5 || !getUpdateErrorCount) return
-  axios.get('https://api.github.com/repos/maillab/cloud-mail/releases/latest').then(({data}) => {
-    hasUpdate.value = data.name !== currentVersion
+  axios.get(releaseApi).then(({data}) => {
+    // release 标题可以留空，tag 一定有，优先用 tag
+    const latest = data.tag_name || data.name
+    hasUpdate.value = !!latest && latest !== currentVersion
     getUpdateErrorCount = 0
   }).catch(e => {
+    // 一个 release 都没发过时 GitHub 返回 404。这是确定答案而非请求失败，
+    // 当成「无更新」收手；照原逻辑重试只会每次进设置页白跑五轮并刷五条报错
+    if (e.response?.status === 404) {
+      getUpdateErrorCount = 0
+      return
+    }
     getUpdateErrorCount++
     setTimeout(() => {
       getUpdate()

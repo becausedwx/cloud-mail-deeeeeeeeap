@@ -343,8 +343,6 @@ const zh = {
     sendBanned: '已禁用',
     sendInternal: '仅站内',
     wrote: '来信',
-    support: '捐助',
-    supportDesc: '请我喝杯奶茶',
     featDesc: '功能说明',
     emailInterception: '邮件拦截',
     emailInterceptionDesc: '输入邮箱或域名拦截邮件，可用于禁止用户接收某些网站的邮件，输入*拦截所有',
