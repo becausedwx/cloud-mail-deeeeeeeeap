@@ -421,7 +421,7 @@
               </div>
               <div class="concerning-item">
                 <span>{{ $t('help') }} : </span>
-                <el-button @click="jump(projectRepo + '#readme')">
+                <el-button @click="jump(projectDoc)">
                   {{ t('document') }}
                   <template #icon>
                     <Icon color="#79D6B5" icon="fluent-color:document-32" width="18" height="18"/>
@@ -836,6 +836,8 @@ defineOptions({
 // 本项目自 3.0.0 从上游分叉后独立维护，版本号另起一条线，不跟随上游编号
 const currentVersion = 'v1.0.0'
 const projectRepo = 'https://github.com/deeeeeeeeap/cloud-mail-deeeeeeeeap'
+// 文件名是中文，走 GitHub blob 链接必须用百分号编码，否则部分客户端拼不出正确地址
+const projectDoc = projectRepo + '/blob/main/doc/%E9%83%A8%E7%BD%B2%E6%95%99%E7%A8%8B.md'
 const releaseApi = 'https://api.github.com/repos/deeeeeeeeap/cloud-mail-deeeeeeeeap/releases/latest'
 const hasUpdate = ref(false)
 let getUpdateErrorCount = 1;
