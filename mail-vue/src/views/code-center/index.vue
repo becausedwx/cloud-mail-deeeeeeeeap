@@ -252,12 +252,21 @@ getList(true)
   box-shadow: inset 0 -1px 0 0 rgba(100, 121, 143, 0.12);
   font-size: 18px;
 
+  // 让输入框吃掉这一行的剩余空间，不要再按 100vw 减一个写死的预留量算宽度：
+  // 那个预留量没有算上下拉框、图标和它们之间的间距，窄屏下就会顶出一行去
+  .search {
+    flex: 1 1 0;
+    min-width: 120px;
+  }
+
   .search-input {
-    width: min(260px, calc(100vw - 170px));
+    width: 100%;
+    max-width: 260px;
   }
 
   .status-select {
     width: 110px;
+    flex-shrink: 0;
   }
 
   .icon {

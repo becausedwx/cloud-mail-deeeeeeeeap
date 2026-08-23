@@ -363,15 +363,15 @@ function openAdd() {
 .reg-key {
   height: 100%;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .scrollbar {
-  height: calc(100% - 48px);
+  flex: 1;
+  min-height: 0;
   position: relative;
   background: var(--extra-light-fill);
-  @media (max-width: 372px) {
-    height: calc(100% - 85px);
-  }
 
   .code-box {
     padding: 15px 15px 25px 15px;
@@ -516,10 +516,16 @@ function openAdd() {
   }
 
   .search-input {
-    width: min(200px, calc(100vw - 140px));
+    width: 100%;
+    max-width: 200px;
   }
 
+  // 让输入框吃掉这一行的剩余空间，不要再按 100vw 减一个写死的预留量算宽度：
+  // 那个预留量没有算上图标本身和它们之间的间距，窄屏下就会顶出一行去
   .search {
+    flex: 1 1 0;
+    min-width: 120px;
+
     :deep(.el-input-group) {
       height: 28px;
     }

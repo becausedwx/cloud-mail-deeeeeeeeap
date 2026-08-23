@@ -1073,6 +1073,8 @@ function adjustWidth() {
 .user-box {
   overflow: hidden;
   height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 :deep(.el-dialog) {
@@ -1103,10 +1105,16 @@ function adjustWidth() {
   font-size: 18px;
 
   .search-input {
-    width: min(200px, calc(100vw - 140px));
+    width: 100%;
+    max-width: 200px;
   }
 
+  // 输入框吃掉这一行的剩余空间，不再按 100vw 减一个写死的预留量算宽度：
+  // 那个预留量没有算上下拉框、图标和它们之间的间距，也没有算上桌面端的侧栏
   .search {
+    flex: 1 1 0;
+    min-width: 120px;
+
     :deep(.el-input-group) {
       height: 28px;
     }
@@ -1140,10 +1148,10 @@ function adjustWidth() {
 .scrollbar {
   width: 100%;
   overflow: auto;
-  height: calc(100% - 50px);
-  @media (max-width: 464px) {
-    height: calc(100% - 90px);
-  }
+  // 高度跟着工具栏实际占多少走。写死 50px / 窄屏 90px 的老做法在 465~519px
+  // 这一段是错的：那里工具栏仍然换行占 77px，列表却按 50px 算，底部会被裁掉够不着
+  flex: 1;
+  min-height: 0;
 }
 
 .details {
