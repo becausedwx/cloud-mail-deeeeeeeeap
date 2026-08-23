@@ -1464,7 +1464,7 @@ function loadData() {
     flex-wrap: wrap;
     align-items: center;
     position: relative;
-    column-gap: 20px;
+    column-gap: 0;
     row-gap: 8px;
     padding-left: 2px;
     color: var(--el-text-color-primary);;
@@ -1488,15 +1488,36 @@ function loadData() {
     cursor: pointer;
   }
 
-  /* 透明 padding 扩点击区至≥40px，视觉尺寸不变；键盘焦点给主色环 */
-  .action-icon {
+  /* 透明 padding 扩点击区至≥40px，视觉尺寸不变；键盘焦点给主色环。
+     走 :deep 是因为 #first 插槽的图标编译在各视图的作用域里，本组件的作用域选择器够不到，
+     只给自带图标加 padding 会让同一排图标一半有点击区一半没有，间距也随之错位 */
+  :deep(.action-icon) {
     padding: 11px;
     box-sizing: content-box;
     border-radius: var(--radius-sm);
     outline-offset: -2px;
+  }
 
-    &:focus-visible {
-      outline: 2px solid var(--el-color-primary);
+  :deep(.action-icon:focus-visible) {
+    outline: 2px solid var(--el-color-primary);
+  }
+
+  /* 图标之间靠各自的透明 padding 撑开就够，所以 column-gap 归零、改由输入框和下拉框
+     自带右边距。用负 margin 去抵消 column-gap 也能对齐，但换行后落在行首的那个图标
+     会被一起拽出容器左边缘 */
+  :deep(.header-left > :not(.action-icon)) {
+    margin-right: 20px;
+  }
+
+  /* 窄屏一行要塞下下拉框加四个图标，横向收一收；纵向保持 40px 以上的可点高度。
+     只收左侧这组：右侧只有计数和一个图标，没有这个空间压力 */
+  @media (max-width: 419px) {
+    :deep(.header-left .action-icon) {
+      padding: 11px 6px;
+    }
+
+    :deep(.header-left > :not(.action-icon)) {
+      margin-right: 12px;
     }
   }
 

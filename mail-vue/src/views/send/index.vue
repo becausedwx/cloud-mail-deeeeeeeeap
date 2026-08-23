@@ -14,9 +14,9 @@
                :type="'send'"
   >
     <template #first>
-      <Icon class="icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-down-outline"
+      <Icon class="icon action-icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-down-outline"
             v-if="params.timeSort === 0" width="28" height="28"/>
-      <Icon class="icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-up-outline" v-else
+      <Icon class="icon action-icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-up-outline" v-else
             width="28" height="28"/>
     </template>
   </emailScroll>
