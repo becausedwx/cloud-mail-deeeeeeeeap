@@ -105,7 +105,7 @@ console.log('[cloud-mail-deploy] Runtime variables are preserved by keep_vars=tr
 
 if (!isTrue(env.CLOUD_MAIL_SKIP_BUILD)) {
   console.log('[cloud-mail-deploy] Building mail-worker/dist before deploy.');
-  const buildResult = spawnSync(process.execPath, [buildScript], {
+  const buildResult = spawnSync(process.execPath, [buildScript, '--deploy'], {
     cwd: repoRoot,
     stdio: 'inherit'
   });

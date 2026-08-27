@@ -23,18 +23,28 @@ test('the shared release command gates Worker tests, frontend tests, and the rel
   ])
 })
 
-test('the Cloudflare Git build cannot bypass the shared release gate', () => {
-  const source = readFileSync(resolve(repoRoot, 'scripts/cloudflare-workers-git-build.mjs'), 'utf8')
+test('deploying skips the unit tests but still checks config and builds the assets', () => {
+  const result = spawnSync(process.execPath, ['scripts/verify.mjs', '--deploy', '--dry-run'], {
+    cwd: repoRoot,
+    encoding: 'utf8'
+  })
 
-  assert.match(source, /verify\.mjs/)
+  assert.equal(result.status, 0, result.stderr)
+  const steps = JSON.parse(result.stdout)
+  assert.deepEqual(steps.map(step => step.id), [
+    'release-config-tests',
+    'frontend-release-build'
+  ])
 })
 
-test('pull requests and main pushes run the same release gate', () => {
+test('pull requests and main pushes run the full release gate, not the deploy subset', () => {
   const workflow = readFileSync(resolve(repoRoot, '.github/workflows/ci.yml'), 'utf8')
 
   assert.match(workflow, /pull_request:/)
   assert.match(workflow, /push:/)
   assert.match(workflow, /node scripts\/cloudflare-workers-git-build\.mjs/)
+  // 部署路径把单元测试交给了这条工作流，所以它绝不能也退化成 --deploy 子集
+  assert.doesNotMatch(workflow, /cloudflare-workers-git-build\.mjs --deploy/)
 })
 
 test('the legacy manual deployment verifies the release before invoking Wrangler deploy', () => {
@@ -44,6 +54,8 @@ test('the legacy manual deployment verifies the release before invoking Wrangler
 
   assert.ok(gateIndex >= 0, 'manual deployment is missing the shared release gate')
   assert.ok(gateIndex < deployIndex, 'manual deployment reaches Wrangler before verification')
+  // 这条工作流是人工触发的一次性部署，等得起全量门禁，不该退化成 --deploy 子集
+  assert.doesNotMatch(workflow, /cloudflare-workers-git-build\.mjs --deploy/)
 })
 
 test('the legacy D1 provisioner uses D1_DATABASE_NAME instead of the Worker name', () => {

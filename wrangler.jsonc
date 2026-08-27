@@ -37,7 +37,7 @@
     ]
   },
   "build": {
-    "command": "node scripts/cloudflare-workers-git-build.mjs",
+    "command": "node scripts/cloudflare-workers-git-build.mjs --deploy",
     "cwd": "."
   }
 }

@@ -288,7 +288,7 @@ npx pnpm@10.11.1 --prefix mail-worker audit
 npx pnpm@10.11.1 --prefix mail-vue audit
 ```
 
-`.github/workflows/ci.yml` 会在 `main` 推送和 Pull Request 上执行同一门禁；Cloudflare Git 构建与兼容的手动部署也会在 Wrangler 部署前执行它。Windows 上如 workerd 因 Unicode 路径不稳定，可把内容一致的 Worker 测试镜像放在纯 ASCII 路径，并通过 `CLOUD_MAIL_WORKER_TEST_DIR` 指向该目录；CI 默认直接使用仓库内的 `mail-worker`。
+`.github/workflows/ci.yml` 会在 `main` 推送和 Pull Request 上执行同一门禁，兼容的手动部署工作流也会在 Wrangler 部署前执行它。**Cloudflare Git 部署不重跑单元测试**：部署路径带 `--deploy` 只执行部署配置自检和 release build，同一 commit 的单元测试由上面这条 CI 承担，避免在两处各跑一遍。Windows 上如 workerd 因 Unicode 路径不稳定，可把内容一致的 Worker 测试镜像放在纯 ASCII 路径，并通过 `CLOUD_MAIL_WORKER_TEST_DIR` 指向该目录；CI 默认直接使用仓库内的 `mail-worker`。
 
 当前依赖审计为 Worker `0` 项、前端仅保留 1 项 Moderate：[`GHSA-fgmj-fm8m-jvvx`](https://github.com/advisories/GHSA-fgmj-fm8m-jvvx)。该公告仅影响使用内置 tooltip 且未自定义 formatter 的 ECharts `lines` 系列；本项目分析页只使用 `line`、`bar` 和 `pie` 系列，并对唯一来自邮件的发件人 tooltip 名称显式做 HTML 转义，因此当前调用路径不触发该漏洞。上游修复仍要求 ECharts `6.1.0`，属于未授权的主版本升级；后续升级 ECharts 6 时需单独完成图表兼容回归。
 

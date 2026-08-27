@@ -35,9 +35,11 @@ function run(args) {
   }
 }
 
-function verifyRelease() {
-  console.log('[cloud-mail-build] Running the shared release gate.');
-  const result = spawnSync(process.execPath, [verifyScript], {
+function verifyRelease(verifyArgs) {
+  console.log(verifyArgs.length
+    ? '[cloud-mail-build] Building release artifacts (unit tests run in CI).'
+    : '[cloud-mail-build] Running the shared release gate.');
+  const result = spawnSync(process.execPath, [verifyScript, ...verifyArgs], {
     cwd: repoRoot,
     stdio: 'inherit'
   });
@@ -60,4 +62,4 @@ ensurePath(verifyScript, 'scripts/verify.mjs');
 
 run([`pnpm@${pnpmVersion}`, '--prefix', workerDir, 'install', '--frozen-lockfile']);
 run([`pnpm@${pnpmVersion}`, '--prefix', vueDir, 'install', '--frozen-lockfile']);
-verifyRelease();
+verifyRelease(process.argv.includes('--deploy') ? ['--deploy'] : []);

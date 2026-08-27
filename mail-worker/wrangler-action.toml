@@ -54,4 +54,4 @@ cors_origins = ${CORS_ORIGINS}
 resend_webhook_allow_unsigned = "${RESEND_WEBHOOK_ALLOW_UNSIGNED}"
 
 [build]
-command = "node ../scripts/cloudflare-workers-git-build.mjs"
+command = "node ../scripts/cloudflare-workers-git-build.mjs --deploy"
