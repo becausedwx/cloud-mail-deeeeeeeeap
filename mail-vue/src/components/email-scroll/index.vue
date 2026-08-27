@@ -1393,17 +1393,17 @@ function loadData() {
     }
   }
 
-  /* 未读行左侧 3px 主色指示条，与侧栏菜单选中态同一设计语言 */
+  /* 未读行左侧 3px 主色指示条。必须占满整行高且不留圆角：
+     行与行之间没有间隙，只有铺满才能让连续的未读邮件连成一整条，
+     居中的短条会在每行上下各留一段空白，视觉上碎成一截一截 */
   &[data-unread="true"]::before {
     content: '';
     position: absolute;
     left: 0;
-    top: 50%;
+    top: 0;
     width: 3px;
-    height: 60%;
-    border-radius: 2px;
+    height: 100%;
     background: var(--el-color-primary);
-    transform: translateY(-50%);
   }
 
   &:hover {
