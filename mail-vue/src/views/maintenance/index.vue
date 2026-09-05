@@ -206,7 +206,7 @@ h2 { font-size: 15px; font-weight: 600; }
 .is-ok { color: var(--el-color-success-dark-2); > span { background: var(--el-color-success-light-9); } }
 .needs-attention { color: var(--el-color-danger); > span { background: var(--el-color-danger-light-9); } }
 .health-check p { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--secondary-text-color); overflow-wrap: anywhere; }
-.maintenance-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.maintenance-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
 .action-panel { display: grid; gap: 12px; }
 .action-heading { display: flex; align-items: center; gap: 12px; }
 .action-mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); flex-shrink: 0; }
