@@ -198,17 +198,23 @@ const chartRuntime = createChartRuntime({
   createChart: element => echarts.init(element)
 })
 
-const topic = computed(() => ({
-  color: uiStore.dark ? '#E5EAF3' : '#303133',
-  background: uiStore.dark ? '#141414' : '#FFFFFF',
-  borderColor: uiStore.dark ? '#141414' : '#FFFFFF',
-  scaleLineColor: uiStore.dark ? '#636466' : '#CDD0D6',
-  crossColor: uiStore.dark ? '#8D9095' : '#A8ABB2',
-  axisColor: uiStore.dark ? '#A3A6AD' : '#909399',
-  splitLineColor: uiStore.dark ? '#58585B' : '#D4D7DE',
-  gaugeSplitLine: uiStore.dark ? '#CFD3DC' : '#606266',
-  containerBackground: uiStore.dark ? '#6C6E72' : '#E6EBF8'
-}))
+const topic = computed(() => {
+  // Read the shared palette after Vue applies the selected theme.
+  uiStore.dark
+  const styles = getComputedStyle(document.documentElement)
+  const color = name => styles.getPropertyValue(name).trim()
+  return {
+    color: color('--el-text-color-primary'),
+    background: color('--el-bg-color'),
+    borderColor: color('--el-bg-color'),
+    scaleLineColor: color('--dark-border'),
+    crossColor: color('--secondary-text-color'),
+    axisColor: color('--secondary-text-color'),
+    splitLineColor: color('--el-border-color'),
+    gaugeSplitLine: color('--regular-text-color'),
+    containerBackground: color('--el-color-primary-light-9')
+  }
+})
 let daySendTotal = 0
 let chartRevision = 0
 let optionDirty = false
@@ -779,8 +785,8 @@ function createSendGauge() {
 
     .number-item {
       background: var(--el-bg-color);
-      border-radius: 8px;
-      border: 1px solid var(--el-border-color);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--el-border-color-light);
       padding: 21px 20px;
 
       .top {
@@ -817,7 +823,7 @@ function createSendGauge() {
             display: grid;
             align-items: center;
             padding: 14px;
-            border-radius: 8px;
+            border-radius: var(--radius-lg);
             background: var(--el-color-primary-light-9);
             color: var(--el-color-primary);
           }
@@ -865,8 +871,8 @@ function createSendGauge() {
 
     .picture-item {
       background: var(--el-bg-color);
-      border-radius: 8px;
-      border: 1px solid var(--el-border-color);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--el-border-color-light);
 
       .source-button {
         padding-right: 15px;
@@ -905,8 +911,8 @@ function createSendGauge() {
 
     .picture-cs-item {
       background: var(--el-bg-color);
-      border-radius: 8px;
-      border: 1px solid var(--el-border-color);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--el-border-color-light);
 
       .send-count {
         height: 350px;

@@ -1,27 +1,29 @@
 <template>
   <div class="account-box">
     <div class="head-opt">
-      <Icon v-perm="'account:add'" class="icon add" icon="ion:add-outline" width="23" height="23" @click="add"/>
-      <Icon class="icon refresh" icon="ion:reload" width="18" height="18" @click="refresh"/>
+      <span class="panel-title">{{ $t('emailAccount') }}</span>
+      <button v-perm="'account:add'" type="button" class="account-action" :aria-label="$t('addAccount')" @click="add"><Icon icon="ion:add-outline" width="20" height="20"/></button>
+      <button type="button" class="account-action" :aria-label="$t('refreshList')" @click="refresh"><Icon icon="ion:reload" width="17" height="17"/></button>
     </div>
     <el-scrollbar class="scrollbar" ref="scrollbarRef">
       <div v-infinite-scroll="getAccountList" :infinite-scroll-distance="600" :infinite-scroll-immediate="false">
-        <el-card class="item" :class="itemBg(item.accountId)" v-for="(item, index) in accounts" :key="item.accountId"
+        <el-card shadow="never" class="item" :class="itemBg(item.accountId)" v-for="(item, index) in accounts" :key="item.accountId"
                  @click="changeAccount(item)">
-          <div class="account">
+          <button type="button" class="account" @click.stop="changeAccount(item)" :aria-pressed="accountStore.currentAccountId === item.accountId">
             {{ item.email }}
-          </div>
+          </button>
           <div class="opt">
             <div class="send-email" @click.stop>
-              <Icon @click="setAllReceive(item)" v-if="!item.allReceive" icon="eva:email-fill" width="22" height="22" color="#fccb1a"/>
-              <Icon @click="setAllReceive(item)" v-else icon="flat-color-icons:folder" width="22" height="22" color="#23c4f1" />
+              <button type="button" class="account-action" :aria-label="$t('allMail')" :aria-pressed="!!item.allReceive" @click="setAllReceive(item)">
+                <Icon :icon="item.allReceive ? 'fluent:mail-list-28-regular' : 'mdi:email-outline'" width="18" height="18"/>
+              </button>
             </div>
             <div class="settings" @click.stop>
-              <Icon icon="fluent-color:clipboard-24" width="22" height="22" @click.stop="copyAccount(item.email)"/>
-              <Icon icon="fluent:settings-24-filled" width="21" height="21" color="#909399"
-                    v-if="showNullSetting(item)"/>
-              <el-dropdown v-else>
-                <Icon icon="fluent:settings-24-filled" width="21" height="21" color="#909399"/>
+              <button type="button" class="account-action" :aria-label="$t('copy') + ' ' + item.email" @click.stop="copyAccount(item.email)">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
+              </button>
+              <el-dropdown v-if="!showNullSetting(item)">
+                <button type="button" class="account-action" :aria-label="$t('settings')"><Icon icon="fluent:settings-48-regular" width="18" height="18"/></button>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item v-if="hasPerm('email:send')" @click="openSetName(item)">{{ $t('rename') }}</el-dropdown-item>
@@ -514,15 +516,10 @@ function submit() {
   })
 }
 </script>
-<style>
-path[fill="#ffdda1"] {
-  fill: #ffdd7d;
-}
-</style>
 <style scoped lang="scss">
 .account-box {
 
-  border-right: 1px solid var(--el-border-color) !important;
+  border-right: 1px solid var(--el-border-color-light);
   background-color: var(--el-bg-color);
   height: 100%;
   overflow: hidden;
@@ -530,34 +527,20 @@ path[fill="#ffdda1"] {
   .head-opt {
     display: flex;
     align-items: center;
-    height: 38px;
+    height: 56px;
     box-shadow: var(--header-actions-border);
     padding-left: 10px;
     padding-right: 10px;
 
-    .icon {
-      cursor: pointer;
-    }
-
-    .refresh {
-      margin-left: 10px;
-    }
-
-    .add {
-      margin-left: 2px;
-    }
-
-    .head-opt:not(.add) .refresh {
-      margin-left: 5px;
-    }
+    .panel-title { flex: 1; font-weight: 600; color: var(--regular-text-color); padding-left: 4px; }
   }
 
   .scrollbar {
     width: 100%;
-    height: calc(100% - 38px);
+    height: calc(100% - 56px);
     overflow: auto;
     @media (max-width: 767px) {
-      height: calc(100% - 98px);
+      height: calc(100% - 116px);
     }
 
     .empty {
@@ -582,17 +565,24 @@ path[fill="#ffdda1"] {
   }
 
   .item {
-    background-color: var(--el-bg-color);
-    border-radius: 8px;
+    background-color: transparent;
+    box-shadow: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
     padding: 12px 10px;
-    margin-bottom: 10px;
+    margin-bottom: 4px;
     margin-left: 10px;
     margin-right: 10px;
     cursor: pointer;
 
     .account {
+      display: block;
+      width: 100%;
+      text-align: left;
+      color: var(--el-text-color-primary);
+      cursor: pointer;
       font-weight: 600;
-      margin-bottom: 20px;
+      margin-bottom: 8px;
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
@@ -602,7 +592,7 @@ path[fill="#ffdda1"] {
       display: flex;
       justify-content: space-between;
       font-size: 12px;
-      color: #888;
+      color: var(--secondary-text-color);
 
       .settings {
         display: flex;
@@ -627,7 +617,21 @@ path[fill="#ffdda1"] {
 
   .item-choose {
     background: var(--choose-account-background);
+    border-color: var(--el-color-primary-light-8);
   }
+}
+
+.account-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--secondary-text-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  &:hover { color: var(--el-color-primary); background: var(--base-fill); }
+  &[aria-pressed="true"] { color: var(--el-color-primary); background: var(--el-color-primary-light-8); }
 }
 
 

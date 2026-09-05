@@ -1,7 +1,7 @@
 <template>
-  <div :class="shouldShowAccountPanel ? 'main-box-show' : 'main-box-hide'">
+  <div class="main-box" :class="{'with-accounts': shouldShowAccountPanel}">
     <div :class="shouldShowAccountPanel ? 'block-show' : 'block-hide'" @click="uiStore.accountShow = false"></div>
-    <AccountPanel v-if="accountPanelMounted && hasAccountQueryPerm" :class="shouldShowAccountPanel ? 'show' : 'hide'" />
+    <AccountPanel v-if="accountPanelMounted && hasAccountQueryPerm" :class="shouldShowAccountPanel ? 'show' : 'hide'" :inert="!shouldShowAccountPanel" />
     <router-view class="main-view" v-slot="{ Component,route }">
       <keep-alive :include="['email','all-email','send','sys-setting','star','user','role','analysis','reg-key','draft']">
         <component :is="Component" :key="route.name"/>
@@ -125,7 +125,7 @@ const handleResize = () => {
   if (['content','email','send'].includes(route.meta.name)) {
     if (innerWidth !==  window.innerWidth) {
       innerWidth = window.innerWidth;
-      uiStore.accountShow = window.innerWidth >= 767;
+      uiStore.accountShow = window.innerWidth > 767;
     }
   }
 }
@@ -175,44 +175,21 @@ const handleResize = () => {
 }
 
 
-.main-box-show {
-  display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  height: calc(100% - 60px);
-  min-width: 0;
-  overflow: hidden;
-  @media (max-width: 767px) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.main-box-hide {
+.main-box {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   height: calc(100% - 60px);
   min-width: 0;
   overflow: hidden;
+  &.with-accounts {
+    grid-template-columns: 240px minmax(0, 1fr);
+    @media (max-width: 767px) { grid-template-columns: minmax(0, 1fr); }
+  }
 }
-
-
 .main-view {
   background: var(--el-bg-color);
   min-width: 0;
   width: 100%;
   overflow: hidden;
-}
-
-
-.navigation {
-  height: 30px;
-  border-bottom: solid 1px var(--el-menu-border-color);
-  display: inline-flex;
-  justify-items: center;
-  align-items: center;
-  width: 100%;
-  .tag {
-    background: var(--el-bg-color);
-    margin-left: 5px;
-  }
 }
 </style>

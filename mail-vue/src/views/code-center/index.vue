@@ -9,8 +9,8 @@
         <el-option :label="$t('all')" value="all"/>
         <el-option :label="$t('staleCode')" value="stale"/>
       </el-select>
-      <Icon class="icon" icon="iconoir:search" @click="search" width="20" height="20"/>
-      <Icon class="icon" icon="ion:reload" width="18" height="18" @click="refresh"/>
+      <button class="icon" type="button" :aria-label="$t('search')" @click="search"><Icon icon="iconoir:search" width="20" height="20"/></button>
+      <button class="icon" type="button" :aria-label="$t('refreshList')" @click="refresh"><Icon icon="ion:reload" width="18" height="18"/></button>
     </div>
 
     <div class="code-help">{{ $t('codeCenterHint') }}</div>
@@ -42,8 +42,6 @@
             <div class="info-left">
               <div class="info-left-item">
                 <span class="code" :class="{hidden: item.isStale || !item.code}" @click.stop="copyCode(item)">{{ displayCode(item) }}</span>
-                <el-tag v-if="item.isStale" type="info">{{ $t('staleCode') }}</el-tag>
-                <el-tag v-else type="success">{{ $t('freshCode') }}</el-tag>
                 <el-tag v-if="copiedEmailId === item.emailId" type="primary">{{ $t('copied') }}</el-tag>
               </div>
               <div class="info-left-item code-meta" :class="item.isStale ? 'expired' : ''">{{ codeStatusText(item) }}</div>
@@ -246,7 +244,7 @@ getList(true)
 .header-actions {
   padding: 9px 15px;
   display: flex;
-  gap: 18px;
+  gap: 12px;
   flex-wrap: wrap;
   align-items: center;
   box-shadow: inset 0 -1px 0 0 rgba(100, 121, 143, 0.12);
@@ -270,6 +268,12 @@ getList(true)
   }
 
   .icon {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    color: var(--regular-text-color);
+    border-radius: var(--radius-sm);
     cursor: pointer;
     transition: color var(--transition-fast), transform var(--transition-fast);
 
@@ -294,7 +298,7 @@ getList(true)
 
 .code-help {
   flex-shrink: 0;
-  padding: 8px 15px;
+  padding: 12px 24px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
   line-height: 1.4;
@@ -310,23 +314,23 @@ getList(true)
 }
 
 .code-box {
-  padding: 15px 15px 10px 15px;
+  padding: 24px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 15px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 16px;
 
   .code-item {
     background: var(--el-bg-color);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     border: 1px solid var(--el-border-color);
-    box-shadow: var(--shadow-card);
+    box-shadow: none;
     transition: border-color var(--transition-base), box-shadow var(--transition-base),
       transform var(--transition-base), opacity var(--transition-base);
-    padding: 15px;
+    padding: 22px;
     cursor: pointer;
 
     &.stale {
-      opacity: 0.62;
+      background: var(--extra-light-fill);
       box-shadow: none;
     }
 
@@ -338,7 +342,7 @@ getList(true)
     &:hover {
       border-color: var(--el-color-primary-light-5);
       box-shadow: var(--shadow-card-hover);
-      transform: translateY(-1px);
+
     }
 
     &:focus-visible {
@@ -371,7 +375,8 @@ getList(true)
 
     .code {
       font-weight: bold;
-      font-size: 18px;
+      font-size: 28px;
+      line-height: 1.4;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       letter-spacing: 0.04em;
       white-space: nowrap;
@@ -380,6 +385,7 @@ getList(true)
       cursor: pointer;
 
       &.hidden {
+        font-size: 18px;
         font-family: inherit;
         letter-spacing: normal;
         color: var(--el-text-color-secondary);
@@ -471,5 +477,9 @@ getList(true)
   pointer-events: none;
   transition: var(--loading-hide-transition);
   opacity: 0;
+}
+@media (max-width: 767px) {
+  .code-box { padding: 16px; }
+  .code-help { padding: 12px 16px; }
 }
 </style>

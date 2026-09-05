@@ -1,4 +1,7 @@
 const zh = {
+    composeMessage: '写邮件',
+    toggleNavigation: '展开或收起导航',
+    toggleTheme: '切换深浅主题',
     inbox: '收件箱',
     drafts: '草稿箱',
     sent: '已发送',

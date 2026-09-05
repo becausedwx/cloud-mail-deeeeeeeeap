@@ -1,4 +1,7 @@
 const zhTw = {
+    composeMessage: '寫郵件',
+    toggleNavigation: '展開或收起導覽',
+    toggleTheme: '切換深淺主題',
     inbox: '收件匣',
     drafts: '草稿匣',
     sent: '已傳送',

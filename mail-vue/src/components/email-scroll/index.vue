@@ -1146,11 +1146,11 @@ function loadData() {
   display: flex;
   padding: 8px 0;
   justify-content: space-between;
-  box-shadow: var(--header-actions-border);
+  border-bottom: 1px solid var(--el-border-color-lighter);
   cursor: pointer;
   align-items: center;
   position: relative;
-  transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition: background-color var(--transition-fast);
   height: 48px;
   @media (max-width: 1366px) {
     height: 83px;
@@ -1403,7 +1403,7 @@ function loadData() {
     top: 0;
     width: 3px;
     height: 100%;
-    background: var(--el-color-primary);
+    background: var(--el-color-primary-light-5);
   }
 
   &:hover {
@@ -1467,7 +1467,7 @@ function loadData() {
     column-gap: 0;
     row-gap: 8px;
     padding-left: 2px;
-    color: var(--el-text-color-primary);;
+    color: var(--regular-text-color);
   }
 
   .header-right {
@@ -1475,7 +1475,7 @@ function loadData() {
     grid-template-columns: auto auto;
     align-items: start;
     height: 100%;
-    color: var(--el-text-color-primary);;
+    color: var(--regular-text-color);
 
     .email-count {
       white-space: nowrap;

@@ -57,7 +57,7 @@
         {{$t('delAccountMsg')}}
       </div>
       <div>
-        <el-button type="primary" @click="deleteConfirm">{{$t('deleteUserBtn')}}</el-button>
+        <el-button type="danger" plain @click="deleteConfirm">{{$t('deleteUserBtn')}}</el-button>
       </div>
     </div>
     <el-dialog v-model="pwdShow" :title="$t('changePassword')" width="340">
@@ -260,10 +260,23 @@ function submitPwd() {
 </script>
 <style scoped lang="scss">
 .box {
-  padding: 40px 40px;
+  padding: 32px;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--extra-light-fill);
+
+  > .container, > .language, > .local-drafts, > .del-email {
+    max-width: 760px;
+    padding: 24px;
+    border: 1px solid var(--el-border-color-light);
+    border-radius: var(--radius-lg);
+    background: var(--el-bg-color);
+    margin-bottom: 20px;
+  }
 
   @media (max-width: 767px) {
-    padding: 30px 30px;
+    padding: 16px;
+    > .container, > .language, > .local-drafts, > .del-email { padding: 20px; }
   }
 
   .update-pwd {
@@ -285,8 +298,9 @@ function submitPwd() {
 
     .item {
       display: grid;
-      grid-template-columns: 50px 1fr;
-      gap: 140px;
+      grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr);
+      align-items: center;
+      gap: 20px;
       position: relative;
       .user-name {
         display: grid;
@@ -307,13 +321,9 @@ function submitPwd() {
       }
 
       .edit-name {
-        color: #4dabff;
+        color: var(--el-color-primary);
         padding-left: 10px;
         cursor: pointer;
-      }
-
-      @media (max-width: 767px) {
-        gap: 70px;
       }
 
       div:first-child {

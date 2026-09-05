@@ -386,13 +386,8 @@ refresh()
   color: var(--el-text-color-regular);
   font-size: 13px;
   cursor: pointer;
-  box-shadow:
-    0 0 0 1px oklch(0 0 0 / 0.06),
-    0 1px 2px -1px oklch(0 0 0 / 0.06),
-    0 2px 4px 0 oklch(0 0 0 / 0.04);
-  transition-property: scale, box-shadow, background-color, color;
-  transition-duration: 150ms;
-  transition-timing-function: ease-out;
+  border: 1px solid var(--el-border-color);
+  transition: background-color var(--transition-fast), color var(--transition-fast);
 
   svg {
     flex-shrink: 0;
@@ -400,10 +395,6 @@ refresh()
   }
 
   &:hover:not(:disabled) {
-    box-shadow:
-      0 0 0 1px oklch(0 0 0 / 0.08),
-      0 1px 2px -1px oklch(0 0 0 / 0.08),
-      0 2px 4px 0 oklch(0 0 0 / 0.06);
     background: var(--el-fill-color-light);
   }
 
@@ -414,15 +405,6 @@ refresh()
   &:disabled {
     cursor: not-allowed;
     opacity: 0.55;
-  }
-}
-
-html.dark .repair-btn {
-  box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08);
-
-  &:hover:not(:disabled) {
-    box-shadow: 0 0 0 1px oklch(1 0 0 / 0.13);
-    background: var(--el-fill-color-light);
   }
 }
 

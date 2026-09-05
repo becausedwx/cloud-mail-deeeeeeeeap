@@ -1,31 +1,26 @@
 <template>
-  <div class="header" :class="!hasPerm('email:send') ? 'not-send' : ''">
+  <div class="header">
     <div class="header-btn">
-      <hanburger @click="changeAside"></hanburger>
+      <button class="menu-toggle icon-button" type="button" :aria-label="$t('toggleNavigation')" :aria-expanded="uiStore.asideShow" aria-controls="app-navigation" @click="changeAside">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+      </button>
       <span class="breadcrumb-item">{{ $t(route.meta.title) }}</span>
     </div>
-    <div v-perm="'email:send'" class="writer-box"
-         role="button" tabindex="0"
-         :aria-label="$t('sendEmail')"
+    <button v-perm="'email:send'" class="writer-box" type="button"
          @pointerenter="preloadWriter"
          @pointerdown="preloadWriter"
          @focus="preloadWriter"
-         @keydown="handleWriterKeyDown"
          @click="openSend">
-      <div class="writer">
-        <Icon icon="material-symbols:edit-outline-sharp" width="22" height="22"/>
-      </div>
-    </div>
+      <Icon icon="material-symbols:edit-outline-sharp" width="18" height="18"/>
+      <span>{{ $t('composeMessage') }}</span>
+    </button>
     <div class="toolbar">
-      <div v-if="uiStore.dark" class="sun-icon icon-item" @click="openDark($event)">
-        <Icon icon="mingcute:sun-fill"/>
-      </div>
-      <div v-else class="dark-icon icon-item" @click="openDark($event)">
-        <Icon icon="solar:moon-linear"/>
-      </div>
-      <div class="notice icon-item" @click="openNotice">
+      <button class="icon-button" type="button" :aria-label="$t('toggleTheme')" :aria-pressed="uiStore.dark" @click="openDark">
+        <Icon :icon="uiStore.dark ? 'mingcute:sun-fill' : 'solar:moon-linear'" width="20" height="20"/>
+      </button>
+      <button class="icon-button" type="button" :aria-label="$t('noticeTitle')" @click="openNotice">
         <Icon icon="streamline-plump:announcement-megaphone"/>
-      </div>
+      </button>
       <el-dropdown ref="userinfoRef" @visible-change="e => userInfoShow = e" :teleported="false" popper-class="detail-dropdown">
         <div class="avatar" @click="userInfoHide" >
           <div class="avatar-text">
@@ -55,8 +50,7 @@
               <div>
                 <div>
                   <span v-if="sendCount" style="margin-right: 5px">{{ sendCount }}</span>
-                  <el-tag v-if="!hasPerm('email:send')">{{ sendType }}</el-tag>
-                  <el-tag v-else>{{ sendType }}</el-tag>
+                  <el-tag>{{ sendType }}</el-tag>
                 </div>
                 <div>
                   <el-tag v-if="settingStore.settings.manyEmail || settingStore.settings.addEmail">
@@ -80,7 +74,6 @@
 </template>
 
 <script setup>
-import hanburger from '@/components/hamburger/index.vue'
 import {logout} from "@/request/login.js";
 import {Icon} from "@iconify/vue";
 import {useUiStore} from "@/store/ui.js";
@@ -90,7 +83,6 @@ import {computed, ref} from "vue";
 import {useSettingStore} from "@/store/setting.js";
 import {hasPerm} from "@/perm/perm.js"
 import {useI18n} from "vue-i18n";
-import {setExtend} from "@/utils/day.js"
 import {clearAuthSession} from "@/session/auth-session.js";
 
 const {t} = useI18n();
@@ -189,50 +181,13 @@ async function copyEmail(email) {
   }
 }
 
-function changeLang(lang) {
-  setExtend(lang)
-  settingStore.lang = lang
-}
-
 function openNotice() {
   uiStore.showNotice()
 }
 
-function openDark(e) {
-
+function openDark() {
   const nextIsDark = !uiStore.dark
-  const root = document.documentElement
-
-  if (!document.startViewTransition) {
-    switchDark(nextIsDark, root);
-    return
-  }
-
-  const x = e.clientX
-  const y = e.clientY
-
-  const maxX = Math.max(x, window.innerWidth - x)
-  const maxY = Math.max(y, window.innerHeight - y)
-  const endRadius = Math.hypot(maxX, maxY)
-
-  // 标记切换目标，供 CSS 选择器使用
-  root.setAttribute('data-theme-to', nextIsDark ? 'dark' : 'light')
-  root.style.setProperty('--vt-x', `${x}px`)
-  root.style.setProperty('--vt-y', `${y}px`)
-  root.style.setProperty('--vt-end-radius', `${endRadius + 10}px`)
-
-  const transition = document.startViewTransition(() => {
-    switchDark(nextIsDark, root);
-  })
-
-  transition.finished.finally(() => {
-    // 清理标记
-    root.removeAttribute('data-theme-to')
-  })
-}
-
-function switchDark(nextIsDark, root) {
-  root.setAttribute('class', nextIsDark ? 'dark' : '')
+  document.documentElement.classList.toggle('dark', nextIsDark)
   const metaTag = document.getElementById('theme-color-meta');
   const isMobile =  !window.matchMedia("(pointer: fine) and (hover: hover)").matches;
   metaTag.setAttribute('content', nextIsDark ? (isMobile ? '#141414' : '#000000') : (isMobile ? '#FFFFFF' : '#F1F1F1'));
@@ -249,13 +204,6 @@ async function openSend() {
   } catch (error) {
     console.error('Failed to open the writer', error)
   }
-}
-
-function handleWriterKeyDown(event) {
-  if (event.key !== 'Enter' && event.key !== ' ') return
-  event.preventDefault()
-  preloadWriter()
-  openSend()
 }
 
 function changeAside() {
@@ -380,145 +328,89 @@ function formatName(email) {
 
 
 .header {
-  text-align: right;
-  font-size: 12px;
-  display: grid;
-  height: 100%;
-  gap: 10px;
-  grid-template-columns: auto auto 1fr;
-}
-
-.header.not-send {
-  grid-template-columns: auto 1fr;
-}
-
-.writer-box {
-  cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
-  margin-left: 5px;
-
-  .writer {
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    color: #ffffff;
-    background: var(--brand-gradient);
-    transition: box-shadow var(--transition-base), transform var(--transition-base);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    .writer-text {
-      margin-left: 15px;
-      font-size: 14px;
-      font-weight: bold;
-    }
-  }
-
-  &:hover .writer {
-    box-shadow: 0 4px 10px rgba(24, 144, 255, 0.35);
-    transform: translateY(-1px);
-  }
-
-  &:active .writer {
-    transform: translateY(0);
-    box-shadow: 0 2px 4px rgba(24, 144, 255, 0.25);
-  }
+  height: 100%;
+  gap: 20px;
+  padding: 0 20px 0 12px;
 }
 
 .header-btn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  height: 100%;
+  gap: 12px;
   min-width: 0;
+  flex: 1;
 }
 
 .breadcrumb-item {
-  font-weight: bold;
-  font-size: 14px;
-  color: var(--el-text-color-primary);
+  font-weight: 600;
+  font-size: 17px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
+.writer-box {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--el-color-primary);
+  color: var(--el-bg-color);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  &:hover { background: var(--el-color-primary-dark-2); }
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
+  border-radius: var(--radius-md);
+  color: var(--regular-text-color);
+  cursor: pointer;
+  &:hover { background: var(--base-fill); }
+}
+
 .toolbar {
   display: flex;
-  justify-content: end;
-  gap: 15px;
-  @media (max-width: 767px) {
-    gap: 10px;
-  }
-
-  .icon-item {
-    align-self: center;
-    width: 30px;
-    height: 30px;
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: background-color var(--transition-fast), transform var(--transition-fast);
-  }
-
-  .icon-item:hover {
-    background: var(--base-fill);
-  }
-
-  .icon-item:active {
-    transform: scale(0.92);
-  }
-
-  .notice {
-    font-size: 22px;
-    margin-right: 4px;
-  }
-
-  .dark-icon {
-    font-size: 20px;
-  }
-
-  .sun-icon {
-    font-size: 24px;
-  }
-
+  align-items: center;
+  gap: 6px;
   .avatar {
     display: flex;
     align-items: center;
     cursor: pointer;
-
+    margin-left: 8px;
     .avatar-text {
-      background: var(--el-bg-color);
-      color: var(--el-text-color-primary);
-      height: 30px;
-      width: 30px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      border-radius: var(--radius-md);
-      border: 1px solid var(--dark-border);
-      transition: border-color var(--transition-base), box-shadow var(--transition-base);
+      background: var(--el-color-primary-light-9);
+      color: var(--el-color-primary);
+      height: 32px;
+      width: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      font-weight: 600;
     }
-
-    &:hover .avatar-text {
-      border-color: var(--el-color-primary);
-      box-shadow: 0 0 0 2px var(--el-color-primary-light-9);
-    }
-
-    .setting-icon {
-      position: relative;
-      top: 0;
-      margin-right: 10px;
-      bottom: 10px;
-    }
+    .setting-icon { width: 18px; color: var(--secondary-text-color); }
   }
-
 }
 
-.el-tooltip__trigger:first-child:focus-visible {
-  outline: unset;
+@media (max-width: 767px) {
+  .header { gap: 8px; padding: 0 10px; }
+  .header-btn { gap: 6px; }
+  .breadcrumb-item { font-size: 15px; }
+  .writer-box { padding: 0 10px; gap: 5px; }
+  .toolbar { gap: 0; .avatar { margin-left: 4px; } }
+  .toolbar .setting-icon { display: none; }
 }
 </style>

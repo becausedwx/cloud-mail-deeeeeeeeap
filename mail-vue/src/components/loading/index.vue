@@ -27,27 +27,11 @@ export default {
 </script>
 
 <style scoped>
-.el-select-dropdown__loading {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: calc(v-bind(size) * 3.33px);
-  font-size: calc(v-bind(size) * 0.67px);
-}
-
 .circular {
   display: inline;
-  height: v-bind(size) + 'px';
-  width: v-bind(size) + 'px';
+  height: 1em;
+  width: 1em;
   animation: loading-rotate 2s linear infinite;
-}
-.path {
-  animation: loading-dash 1.5s ease-in-out infinite;
-  stroke-dasharray: 90, 150;
-  stroke-dashoffset: 0;
-  stroke-width: 2;
-  stroke: var(--el-color-primary);
-  stroke-linecap: round;
 }
 .loading-path .dot1 {
   transform: translate(3.75px, 3.75px);
@@ -79,20 +63,6 @@ export default {
 @keyframes loading-rotate {
   to {
     transform: rotate(360deg);
-  }
-}
-@keyframes loading-dash {
-  0% {
-    stroke-dasharray: 1, 200;
-    stroke-dashoffset: 0;
-  }
-  50% {
-    stroke-dasharray: 90, 150;
-    stroke-dashoffset: -40px;
-  }
-  100% {
-    stroke-dasharray: 90, 150;
-    stroke-dashoffset: -120px;
   }
 }
 @keyframes custom-spin-move {

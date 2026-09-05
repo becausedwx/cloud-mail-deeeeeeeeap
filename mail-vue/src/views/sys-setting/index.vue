@@ -1663,12 +1663,9 @@ function editSetting(settingForm, refreshStatus = true) {
 .card-grid {
 
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
-  padding: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr));
+  padding: 24px;
   gap: 20px;
-  @media (max-width: 500px) {
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  }
   @media (max-width: 1023px) {
     gap: 15px;
     padding: 15px;
@@ -1698,9 +1695,8 @@ function editSetting(settingForm, refreshStatus = true) {
 
 .settings-card {
   background-color: var(--el-bg-color);
-  border-radius: 8px;
-  border: 1px solid var(--el-border-color);
-  transition: all 300ms;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--el-border-color-light);
   overflow: hidden;
 }
 
@@ -1708,8 +1704,8 @@ function editSetting(settingForm, refreshStatus = true) {
 .card-title {
   font-size: 15px;
   font-weight: bold;
-  padding: 10px 20px;
-  border-bottom: 1px solid var(--el-border-color);
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--el-border-color-light);
 }
 
 .card-content {

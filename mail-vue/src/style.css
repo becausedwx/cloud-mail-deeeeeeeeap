@@ -19,11 +19,11 @@ html, body {
 
 
 .el-table thead th {
-    font-weight: bold !important;
+    font-weight: 600 !important;
 }
 
 body {
-    font-family: -apple-system, Inter, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+    font-family: -apple-system, Inter, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Microsoft YaHei", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
     line-height: 1.5;
     color: var(--el-text-color-primary);
     font-size: 14px;
@@ -62,7 +62,8 @@ button, input, select, textarea {
 }
 
 .el-message {
-    white-space: nowrap !important;
+    max-width: calc(100vw - 32px);
+    white-space: normal !important;
 }
 
 .message-bottom {
@@ -107,133 +108,108 @@ button, input, select, textarea {
     max-height: 220px !important;
 }
 
-:root {
-    --el-color-primary: #1890ff;
-    --el-color-primary-dark-2: #1064c0;
-    --el-color-primary-light-3: #4dabff;
-    --el-color-primary-light-5: #69c0ff;
-    --el-color-primary-light-7: #91d5ff;
-    --el-color-primary-light-9: #e6f7ff;
-
-    /* 品牌渐变：侧栏标题块与写信圆钮共用，改色只改这里 */
-    --brand-gradient: linear-gradient(135deg, #1890ff, #3a80dd);
-    /* 登录页天空背景（无自定义背景图时使用） */
-    --login-sky-gradient: linear-gradient(to bottom, #2980b9, #6dd5fa, #fff);
-
-    /* 设计令牌：圆角 / 阴影 / 过渡，全局统一引用 */
-    --radius-sm: 4px;
+/* Shared surfaces keep mailbox and administration pages in the same visual system. */
+html:root {
+    --el-color-primary: #3765cf;
+    --el-color-primary-dark-2: #2b50a6;
+    --el-color-primary-light-3: #7393dd;
+    --el-color-primary-light-5: #9bb2e7;
+    --el-color-primary-light-7: #c3d1f1;
+    --el-color-primary-light-8: #d7e0f5;
+    --el-color-primary-light-9: #ebf0fa;
+    --el-text-color-primary: #202938;
+    --el-text-color-regular: #4e5969;
+    --el-text-color-secondary: #737d8c;
+    --el-border-color: #dce1e8;
+    --el-border-color-light: #e5e9ee;
+    --el-border-color-lighter: #edf0f4;
+    --el-border-radius-base: 8px;
+    --el-bg-color: #ffffff;
+    --el-fill-color-light: #f4f6f9;
+    --radius-sm: 6px;
     --radius-md: 8px;
     --radius-lg: 12px;
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-    --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+    --shadow-card: 0 2px 8px rgb(25 38 60 / 3%);
+    --shadow-card-hover: 0 4px 16px rgb(25 38 60 / 6%);
     --transition-fast: 150ms ease;
     --transition-base: 200ms ease;
-
-    --extra-light-fill: #FAFCFF;
-    --light-fill: #F5F7FA;
-    --light-border: #E4E7ED;
+    --extra-light-fill: #f8f9fb;
+    --light-fill: #f3f5f8;
+    --light-border: #e5e9ee;
     --header-actions-border: inset 0 -1px 0 0 var(--el-border-color-lighter);
-    --aside-background: #001529;
-    --loading-background: rgba(255, 255, 255, 0.8);
-    --dark-border: #CDD0D6;
-    --base-fill: #F0F2F5;
-    --regular-text-color: #585d69;
-    --light-border-color: #e7e9ec;
-    --aside-right-border: 3px 0 5px rgba(0, 21, 41, .35);
-    --choose-account-background: var(--el-color-primary-light-8);
-    --el-text-color-regular: var(--el-text-color-primary);
-    --email-scroll-content-color: rgba(25, 41, 59, 0.55);
-    --email-hover-background: #F2F6FC;
-    --login-border: none;
-    --form-desc-color: #71717a;
+    --aside-background: #f3f5f8;
+    --loading-background: rgb(255 255 255 / 80%);
+    --dark-border: #c7cfd9;
+    --base-fill: #edf0f5;
+    --regular-text-color: #596577;
+    --light-border-color: #e5e9ee;
+    --choose-account-background: var(--el-color-primary-light-9);
+    --email-scroll-content-color: #768193;
+    --email-hover-background: #f5f7fc;
+    --form-desc-color: #687386;
     --login-switch-color: var(--el-color-primary);
-    --scrollbar-track-color: #A8ABB2;
-    --base-border-color: #DCDFE6;
-    --secondary-text-color: #909399;
-    --message-block-color: rgba(0, 0, 0, 0);
-    --loading-hide-transition: all 200ms;
-    /* 右键选中邮件行的背景（暗色下用暖深色，避免硬编码浅奶油色刺眼） */
-    --right-checked-background: #FDF6EC;
-    /* 登录页暗色夜空背景 */
-    --login-night-gradient: linear-gradient(to bottom, #0d1117, #1a2230, #141414);
-    --vt-x: 50%;
-    --vt-y: 50%;
-    --vt-duration: 520ms;
-    --vt-easing: ease-out;
+    --scrollbar-track-color: #a8b1bf;
+    --base-border-color: #dce1e8;
+    --secondary-text-color: #737d8c;
+    --message-block-color: transparent;
+    --loading-hide-transition: opacity 200ms;
+    --right-checked-background: #edf2fc;
 }
 
-.dark {
-    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.25);
-
-    --extra-light-fill: #191919;
-    --light-fill: #262727;
-    --light-border: #414243;
-    --aside-background: #141414;
-    --header-actions-border: inset 0 -1px 0 0 var(--el-border-color-lighter);
-    --loading-background: rgba(0, 0, 0, 0.3);
-    --dark-border: #636466;
-    --base-fill: #303030;
-    --regular-text-color: #bfbdbc;
-    --light-border-color: #414243;
-    --aside-right-border: 3px 0 5px #0A0A0A;
-    --choose-account-background: #39393A;
-    --email-scroll-content-color: rgba(255, 255, 255, 0.3);
-    --email-hover-background: #1D1E1F;
-    --login-border: none;
-    --form-desc-color: #8D9095;
-    --login-switch-color: rgb(102, 177, 255);
-    --scrollbar-track-color: #8D9095;
-    --base-border-color: #4C4D4F;
-    --secondary-text-color: #A8ABB4;
-    --message-block-color: rgba(30, 30, 30, 0.2);
-    --el-border-color: #414243 !important;
-    --right-checked-background: #3a2f1e;
+html:root.dark {
+    color-scheme: dark;
+    --el-color-primary: #8baaff;
+    --el-color-primary-dark-2: #b1c6ff;
+    --el-color-primary-light-3: #6887d5;
+    --el-color-primary-light-5: #4b65a4;
+    --el-color-primary-light-7: #33456e;
+    --el-color-primary-light-8: #2a3958;
+    --el-color-primary-light-9: #222e45;
+    --el-text-color-primary: #e3e8f0;
+    --el-text-color-regular: #b4bece;
+    --el-text-color-secondary: #939fb2;
+    --el-bg-color: #1b2029;
+    --el-bg-color-overlay: #232a35;
+    --el-fill-color-blank: #1b2029;
+    --el-fill-color-light: #242c38;
+    --el-border-color: #363f4e;
+    --el-border-color-light: #2e3744;
+    --el-border-color-lighter: #29323f;
+    --shadow-card: none;
+    --shadow-card-hover: 0 4px 16px rgb(0 0 0 / 12%);
+    --extra-light-fill: #181d26;
+    --light-fill: #242c38;
+    --light-border: #363f4e;
+    --aside-background: #161b23;
+    --loading-background: rgb(20 25 34 / 75%);
+    --dark-border: #515e72;
+    --base-fill: #2b3442;
+    --regular-text-color: #b4bece;
+    --light-border-color: #363f4e;
+    --email-scroll-content-color: #99a6ba;
+    --email-hover-background: #242d3b;
+    --form-desc-color: #99a6ba;
+    --scrollbar-track-color: #59667a;
+    --base-border-color: #363f4e;
+    --secondary-text-color: #939fb2;
+    --message-block-color: rgb(20 25 34 / 20%);
+    --right-checked-background: #29364e;
 }
 
 .el-input {
     --el-input-text-color: var(--el-text-color-primary) !important;
 }
 
-/* 视图过渡，基于径向剪裁 */
-html.dark,
-html:not(.dark) {
-    view-transition-name: root;
+.el-table {
+    --el-table-header-bg-color: var(--extra-light-fill);
+    --el-table-row-hover-bg-color: var(--email-hover-background);
 }
 
-::view-transition-old(root),
-::view-transition-new(root) {
-    animation: none;
-    mix-blend-mode: normal;
+.el-dialog {
+    --el-dialog-border-radius: var(--radius-lg);
 }
 
-/* 层级控制，确保对应方向动画在上层可见 */
-html[data-theme-to="dark"]::view-transition-new(root) { z-index: 2; }
-html[data-theme-to="dark"]::view-transition-old(root) { z-index: 1; }
-html[data-theme-to="light"]::view-transition-old(root) { z-index: 2; }
-html[data-theme-to="light"]::view-transition-new(root) { z-index: 1; }
-
-/* 切到暗色：新视图从点击点向外扩散 */
-html[data-theme-to="dark"]::view-transition-new(root) {
-    clip-path: circle(0px at var(--vt-x) var(--vt-y));
-    animation: vt-radial-in var(--vt-duration) var(--vt-easing) forwards;
-}
-
-/* 切到浅色：旧视图向点击点收缩 */
-html[data-theme-to="light"]::view-transition-old(root) {
-    clip-path: circle(var(--vt-end-radius, 0px) at var(--vt-x) var(--vt-y));
-    animation: vt-radial-out var(--vt-duration) var(--vt-easing) forwards;
-}
-
-@keyframes vt-radial-in {
-    from { clip-path: circle(0px at var(--vt-x) var(--vt-y)); }
-    to   { clip-path: circle(var(--vt-end-radius, 0px) at var(--vt-x) var(--vt-y)); }
-}
-
-@keyframes vt-radial-out {
-    from { clip-path: circle(var(--vt-end-radius, 0px) at var(--vt-x) var(--vt-y)); }
-    to   { clip-path: circle(0px at var(--vt-x) var(--vt-y)); }
-}
+.el-button { font-weight: 500; }
 
 /* 用户开启“减少动效”时，关闭装饰性动画 */
 @media (prefers-reduced-motion: reduce) {

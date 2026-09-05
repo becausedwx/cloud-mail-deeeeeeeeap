@@ -1,4 +1,7 @@
 const ja = {
+    composeMessage: 'メール作成',
+    toggleNavigation: 'ナビゲーションを切り替え',
+    toggleTheme: 'テーマを切り替え',
     inbox: '受信トレイ',
     drafts: '下書き',
     sent: '送信済み',

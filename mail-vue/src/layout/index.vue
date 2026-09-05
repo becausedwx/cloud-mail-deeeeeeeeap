@@ -1,7 +1,9 @@
 <template>
   <el-container class="layout">
     <el-aside
+        id="app-navigation"
         class="aside"
+        :inert="!uiStore.asideShow"
         :class="uiStore.asideShow ? 'aside-show' : 'el-aside-hide'">
       <Aside />
     </el-aside>
@@ -94,16 +96,15 @@ onBeforeUnmount(() => {
   height: 100%;
   z-index: 100;
   transform: translateX(-100%);
-  transition: all 100ms ease;
+  transition: transform var(--transition-base);
 }
 
 .aside-show {
-  -webkit-box-shadow: var(--aside-right-border);
-  box-shadow: var(--aside-right-border);
+  border-right: 1px solid var(--el-border-color-light);
   transform: translateX(0);
-  transition: all 100ms ease;
+  transition: transform var(--transition-base);
   z-index: 101;
-  @media (max-width: 1025px) {
+  @media (max-width: 1024px) {
     position: fixed;
     top: 0;
     left: 0;
@@ -115,7 +116,7 @@ onBeforeUnmount(() => {
 
 .el-aside {
   width: auto;
-  transition: all 100ms ease;
+  transition: transform var(--transition-base);
 }
 
 .layout {
@@ -144,7 +145,7 @@ onBeforeUnmount(() => {
 
 .el-header {
   background: var(--el-bg-color);
-  border-bottom: solid 1px var(--el-border-color);
+  border-bottom: solid 1px var(--el-border-color-light);
   padding: 0 0 0 0;
 }
 

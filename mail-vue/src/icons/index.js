@@ -1,4 +1,14 @@
 import {addCollection} from "@iconify/vue";
+// Navigation icons are bundled so the primary menu also works offline.
+addCollection({
+    prefix: 'cloud-mail',
+    width: 24,
+    height: 24,
+    icons: {
+        code: {body: '<g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M7 10v4m5-4v4m5-4v4"/></g>'},
+        tools: {body: '<g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M9 7V4h6v3"/><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 12h18M8 10v4m8-4v4"/></g>'},
+    }
+});
 addCollection({
     "prefix": "hugeicons",
     "lastModified": 1757879391,

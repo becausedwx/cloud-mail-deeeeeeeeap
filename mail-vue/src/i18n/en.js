@@ -1,4 +1,7 @@
 const en = {
+    composeMessage: 'Compose',
+    toggleNavigation: 'Toggle navigation',
+    toggleTheme: 'Toggle color theme',
     inbox: 'Inbox',
     drafts: 'Drafts',
     sent: 'Sent',
