@@ -671,6 +671,20 @@ function submitRegister() {
   padding: 48px 20px;
 }
 
+#login-box.has-custom-background .form-wrapper {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(480px, 100%);
+  padding: 0;
+  display: flex;
+  justify-content: stretch;
+  align-items: stretch;
+  gap: 0;
+  border-left: 1px solid rgb(255 255 255 / 22%);
+  box-shadow: -18px 0 48px rgb(7 19 36 / 14%);
+  backdrop-filter: blur(14px);
+}
+
 .container {
   background: v-bind(loginOpacity);
   padding: 40px;
@@ -702,7 +716,7 @@ function submitRegister() {
   .form-title {
     font-weight: bold;
     font-size: 26px;
-    letter-spacing: -0.03em;
+    letter-spacing: 0;
     font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei", sans-serif;
   }
 
@@ -745,6 +759,17 @@ function submitRegister() {
       height: 42px;
     }
   }
+}
+
+#login-box.has-custom-background .container {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: clamp(28px, 5vw, 64px);
 }
 
 :deep(.el-select-dropdown__item) {
@@ -819,9 +844,23 @@ function submitRegister() {
 }
 
 #login-box {
-  background: var(--aside-background);
+  position: relative;
+  isolation: isolate;
+  background: #142b45;
   min-height: 100%;
   overflow-x: hidden;
+}
+
+#login-box:not(.has-custom-background)::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(118deg, rgb(93 190 193 / 20%), transparent 38%),
+    linear-gradient(300deg, rgb(229 183 113 / 14%), transparent 34%),
+    #142b45;
 }
 
 .login-art {
@@ -863,6 +902,32 @@ function submitRegister() {
 
 .login-background-ready {
   opacity: 1;
+}
+
+@media (max-width: 767px) {
+  .form-wrapper {
+    padding: 24px 16px;
+  }
+
+  #login-box.has-custom-background .form-wrapper {
+    position: relative;
+    width: 100%;
+    min-height: 100dvh;
+    border-left: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  #login-box.has-custom-background .container {
+    height: auto;
+    min-height: 100dvh;
+    padding: 32px 22px;
+    border-radius: 0;
+  }
+
+  #login-box:not(.has-custom-background) .container {
+    width: min(420px, 100%);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
