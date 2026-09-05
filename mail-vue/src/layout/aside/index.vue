@@ -2,7 +2,7 @@
   <el-scrollbar class="navigation-scroll">
     <nav :aria-label="settingStore.settings.title">
       <div class="brand">
-        <span class="brand-mark"><Icon icon="mdi:email-outline" width="22" height="22" /></span>
+        <span class="brand-mark"><Icon icon="cloud-mail:mail" width="24" height="24" /></span>
         <span class="brand-name">{{ settingStore.settings.title }}</span>
       </div>
       <el-menu :default-active="route.meta.name" @select="navigate">
@@ -32,20 +32,20 @@ const route = useRoute()
 const router = useRouter()
 const groups = [
   { label: '', items: [
-    { name: 'email', label: 'inbox', icon: 'hugeicons:mailbox-01' },
-    { name: 'send', label: 'sent', icon: 'cil:send', permission: 'email:send' },
-    { name: 'draft', label: 'drafts', icon: 'ep:document', permission: 'email:send' },
-    { name: 'star', label: 'starred', icon: 'solar:star-line-duotone' },
+    { name: 'email', label: 'inbox', icon: 'cloud-mail:inbox' },
+    { name: 'send', label: 'sent', icon: 'cloud-mail:send', permission: 'email:send' },
+    { name: 'draft', label: 'drafts', icon: 'cloud-mail:draft', permission: 'email:send' },
+    { name: 'star', label: 'starred', icon: 'cloud-mail:star' },
     { name: 'code-center', label: 'codeCenter', icon: 'cloud-mail:code' },
-    { name: 'setting', label: 'settings', icon: 'fluent:settings-48-regular' },
+    { name: 'setting', label: 'settings', icon: 'cloud-mail:user' },
   ] },
   { label: 'manage', items: [
-    { name: 'analysis', label: 'analytics', icon: 'fluent:data-pie-20-regular', permission: 'analysis:query' },
-    { name: 'user', label: 'allUsers', icon: 'si:user-alt-2-line', permission: 'user:query' },
-    { name: 'all-email', label: 'allMail', icon: 'fluent:mail-list-28-regular', permission: 'all-email:query' },
-    { name: 'role', label: 'permissions', icon: 'fluent:lock-closed-16-regular', permission: 'role:query' },
-    { name: 'reg-key', label: 'inviteCode', icon: 'fluent:fingerprint-20-filled', permission: 'reg-key:query' },
-    { name: 'sys-setting', label: 'SystemSettings', icon: 'eos-icons:system-ok-outlined', permission: 'setting:query' },
+    { name: 'analysis', label: 'analytics', icon: 'cloud-mail:chart', permission: 'analysis:query' },
+    { name: 'user', label: 'allUsers', icon: 'cloud-mail:user', permission: 'user:query' },
+    { name: 'all-email', label: 'allMail', icon: 'cloud-mail:mail', permission: 'all-email:query' },
+    { name: 'role', label: 'permissions', icon: 'cloud-mail:lock', permission: 'role:query' },
+    { name: 'reg-key', label: 'inviteCode', icon: 'cloud-mail:key', permission: 'reg-key:query' },
+    { name: 'sys-setting', label: 'SystemSettings', icon: 'cloud-mail:settings', permission: 'setting:query' },
     { name: 'maintenance', label: 'maintenance', icon: 'cloud-mail:tools', permission: 'maintenance:query' },
   ] },
 ]
@@ -60,47 +60,54 @@ function navigate(name) {
 </script>
 
 <style lang="scss" scoped>
-.navigation-scroll { width: 224px; background: var(--aside-background); }
+.navigation-scroll { width: 216px; background: var(--aside-background); color: var(--nav-text); }
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 76px;
-  padding: 0 22px;
-  font-size: 17px;
+  height: 84px;
+  padding: 0 20px;
+  font-size: 19px;
   font-weight: 650;
+  color: #eff5ff;
+  letter-spacing: -0.5px;
+  font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 .brand-mark {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: var(--el-color-primary);
-  color: var(--el-bg-color);
+  width: 36px;
+  height: 36px;
+  border-radius: 11px 11px 11px 3px;
+  background: var(--brand-accent);
+  color: var(--aside-background);
+  transform: rotate(-6deg);
 }
 .brand-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .el-menu {
   border: 0;
-  padding: 0 12px 20px;
+  padding: 0 14px 24px;
   --el-menu-bg-color: transparent;
-  --el-menu-text-color: var(--regular-text-color);
-  --el-menu-hover-bg-color: var(--base-fill);
-  --el-menu-active-color: var(--el-color-primary);
+  --el-menu-text-color: var(--nav-text);
+  --el-menu-hover-bg-color: var(--nav-hover);
+  --el-menu-active-color: var(--nav-active-text);
 }
 .el-menu-item {
-  height: 40px;
-  margin: 3px 0;
+  height: 44px;
+  margin: 4px 0;
   padding: 0 12px !important;
   gap: 12px;
   border-radius: var(--radius-md);
+  transition: background-color var(--transition-fast), color var(--transition-fast);
   svg { flex-shrink: 0; }
-  &.is-active { background: var(--el-color-primary-light-9); font-weight: 600; }
+  &.is-active { background: var(--nav-active); font-weight: 600; box-shadow: 0 2px 6px rgb(0 0 0 / 8%); }
+  &:focus-visible { outline-color: var(--brand-accent); outline-offset: 2px; }
 }
 .manage-title {
-  margin: 24px 12px 8px;
+  margin: 28px 12px 10px;
   font-size: 12px;
-  color: var(--secondary-text-color);
+  color: var(--nav-heading);
+  letter-spacing: 0.08em;
 }
 </style>

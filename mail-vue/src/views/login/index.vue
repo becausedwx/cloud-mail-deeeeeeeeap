@@ -2,6 +2,11 @@
   <div id="login-box" :class="{'has-custom-background': !!settingStore.settings.background}" v-loading="oauthLoading" :element-loading-text="$t('loginLoading')">
     <div v-if="settingStore.settings.background" class="login-background" :class="{'login-background-ready': backgroundReady}" :style="background"></div>
     <div class="form-wrapper">
+      <div v-if="!settingStore.settings.background" class="login-art" aria-hidden="true">
+        <div class="letter-sheet"><span></span><span></span><span></span><Icon icon="cloud-mail:mail" width="36" height="36"/></div>
+        <div class="letter-envelope"></div>
+        <div class="letter-seal"><Icon icon="cloud-mail:send" width="28" height="28"/></div>
+      </div>
       <div class="container">
         <span class="form-title">{{ settingStore.settings.title }}</span>
         <span class="form-desc" v-if="show === 'login'">{{ $t('loginTitle') }}</span>
@@ -659,8 +664,10 @@ function submitRegister() {
   position: relative;
   z-index: 1;
   min-height: 100dvh;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(60px, 8vw, 140px);
   padding: 48px 20px;
 }
 
@@ -671,8 +678,9 @@ function submitRegister() {
   flex-direction: column;
   width: min(420px, 100%);
   border: 1px solid var(--el-border-color-light);
-  border-radius: 16px;
-  box-shadow: var(--shadow-card-hover);
+  border-radius: 24px;
+  box-shadow: 0 24px 80px rgb(9 20 39 / 18%);
+  flex-shrink: 0;
   @media (max-width: 767px) { padding: 28px 24px; }
 
   .btn {
@@ -694,7 +702,8 @@ function submitRegister() {
   .form-title {
     font-weight: bold;
     font-size: 26px;
-    letter-spacing: 0.01em;
+    letter-spacing: -0.03em;
+    font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei", sans-serif;
   }
 
   .switch {
@@ -813,6 +822,35 @@ function submitRegister() {
   background: var(--aside-background);
   min-height: 100%;
   overflow-x: hidden;
+}
+
+.login-art {
+  position: relative;
+  width: 330px;
+  height: 300px;
+  flex-shrink: 0;
+  transform: rotate(-8deg);
+  @media (max-width: 900px) { display: none; }
+}
+.letter-sheet {
+  position: absolute; left: 30px; top: 0; width: 270px; height: 240px;
+  padding: 32px; border-radius: 14px; background: #eef3ff;
+  box-shadow: 0 8px 40px rgb(5 15 33 / 16%);
+  span { display: block; height: 6px; background: #c6d4e9; border-radius: 3px; margin-bottom: 14px; }
+  span:nth-child(2) { width: 75%; }
+  span:nth-child(3) { width: 48%; }
+  svg { position: absolute; right: 28px; top: 140px; color: #758dcc; }
+}
+.letter-envelope {
+  position: absolute; inset: 110px 0 0; border-radius: 8px 8px 18px 18px;
+  background: #adc7ef; box-shadow: 0 24px 60px rgb(5 15 33 / 22%);
+  &::before { content: ''; position: absolute; inset: 0; background: #c7dcfb; clip-path: polygon(0 0, 50% 56%, 100% 0, 100% 100%, 0 100%); border-radius: inherit; }
+  &::after { content: ''; position: absolute; inset: 0; background: #d7e6fc; clip-path: polygon(0 100%, 50% 44%, 100% 100%); border-radius: inherit; }
+}
+.letter-seal {
+  position: absolute; display: grid; place-items: center; width: 60px; height: 60px;
+  right: -18px; bottom: 38px; border-radius: 18px; background: #6ea995; color: white;
+  transform: rotate(16deg); box-shadow: 0 8px 20px rgb(5 15 33 / 15%);
 }
 
 .login-background {

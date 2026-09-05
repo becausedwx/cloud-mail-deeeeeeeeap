@@ -19,6 +19,28 @@ const aiOptions = {
 };
 
 describe('ai service code extraction', () => {
+  it.each([
+    ['fullwidth digits', {subject: '验证码', text: '您的验证码：１２３４５６'}, '123456'],
+    ['fullwidth letters', {subject: 'Verification code', text: 'Your verification code is ＡＢ１２ＣＤ'}, 'AB12CD'],
+    ['typographic dashes', {subject: 'Verification code', text: 'Your verification code is 123–456'}, '123456'],
+    ['a URL beside a label', {subject: 'Verification code', text: 'verification code: https://example.com/verify/code/483920'}, ''],
+    ['an unrelated word containing otp', {subject: 'Hotpot invitation', text: 'Welcome! 483920'}, ''],
+    ['a reference in another sentence', {subject: 'Verification code', text: 'Order 902831. Your verification code is 483920.'}, '483920'],
+    ['a validity period following the code', {subject: 'Verification code', text: 'Your code:\n1234 10 minutes'}, '1234'],
+    ['plain-text reply history', {subject: 'Re: Verification code', text: 'Please send a new code.\n\nOn Tue, Alex wrote:\n> Your verification code is 483920'}, ''],
+    ['HTML reply history', {subject: 'Re: Verification code', html: '<p>Please send a new code.</p><blockquote>Your verification code is 483920</blockquote>'}, ''],
+    ['hidden preheader code', {subject: 'Verification code', html: '<div style="display:none">Verification code 654321</div><p>Your verification code: 483920</p>'}, '483920'],
+    ['visible fallback after a non-code text part', {subject: 'Sign in', text: 'View this message in HTML.', html: '<p>Your verification code: 483920</p>'}, '483920'],
+    ['current code before quoted history', {subject: 'Re: Verification code', text: 'Your new verification code: 729104\n> Your verification code was 483920'}, '729104']
+  ])('handles %s without changing the code value', (_, email, expected) => {
+    expect(extractCodeByPattern(email)).toBe(expected);
+  });
+
+  it('does not inspect HTML when the text part already contains a code', () => {
+    const email = {subject: 'Verification code', text: 'Your verification code: 483920'};
+    Object.defineProperty(email, 'html', {get() { throw new Error('HTML should not be needed'); }});
+    expect(extractCodeByPattern(email)).toBe('483920');
+  });
 	it('normalizes code tokens with the local verification rules', () => {
 		expect(normalizeCodeToken('ab-12 cd')).toBe('AB12CD');
 		expect(normalizeCodeToken('ABCDEF')).toBe('');

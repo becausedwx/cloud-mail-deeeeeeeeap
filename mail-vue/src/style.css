@@ -23,7 +23,7 @@ html, body {
 }
 
 body {
-    font-family: -apple-system, Inter, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Microsoft YaHei", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+    font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
     line-height: 1.5;
     color: var(--el-text-color-primary);
     font-size: 14px;
@@ -110,47 +110,57 @@ button, input, select, textarea {
 
 /* Shared surfaces keep mailbox and administration pages in the same visual system. */
 html:root {
-    --el-color-primary: #3765cf;
-    --el-color-primary-dark-2: #2b50a6;
-    --el-color-primary-light-3: #7393dd;
-    --el-color-primary-light-5: #9bb2e7;
-    --el-color-primary-light-7: #c3d1f1;
-    --el-color-primary-light-8: #d7e0f5;
-    --el-color-primary-light-9: #ebf0fa;
-    --el-text-color-primary: #202938;
-    --el-text-color-regular: #4e5969;
-    --el-text-color-secondary: #737d8c;
-    --el-border-color: #dce1e8;
-    --el-border-color-light: #e5e9ee;
-    --el-border-color-lighter: #edf0f4;
-    --el-border-radius-base: 8px;
+    --el-color-primary: #4c61d5;
+    --el-color-primary-dark-2: #394bb5;
+    --el-color-primary-light-3: #8291e2;
+    --el-color-primary-light-5: #a6b0ea;
+    --el-color-primary-light-7: #c9d0f2;
+    --el-color-primary-light-8: #dbe0f7;
+    --el-color-primary-light-9: #eef0fc;
+    --el-color-success: #278574;
+    --el-color-success-dark-2: #216e60;
+    --el-color-success-light-9: #edf7f3;
+    --el-text-color-primary: #23334b;
+    --el-text-color-regular: #526178;
+    --el-text-color-secondary: #65748b;
+    --el-border-color: #d9e0ec;
+    --el-border-color-light: #e4e9f2;
+    --el-border-color-lighter: #edf0f6;
+    --el-border-radius-base: 10px;
     --el-bg-color: #ffffff;
     --el-fill-color-light: #f4f6f9;
-    --radius-sm: 6px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --shadow-card: 0 2px 8px rgb(25 38 60 / 3%);
-    --shadow-card-hover: 0 4px 16px rgb(25 38 60 / 6%);
+    --radius-sm: 7px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-card: 0 2px 4px rgb(25 38 60 / 2%), 0 8px 24px rgb(25 38 60 / 3%);
+    --shadow-card-hover: 0 4px 8px rgb(25 38 60 / 3%), 0 12px 32px rgb(25 38 60 / 7%);
     --transition-fast: 150ms ease;
     --transition-base: 200ms ease;
-    --extra-light-fill: #f8f9fb;
-    --light-fill: #f3f5f8;
-    --light-border: #e5e9ee;
+    --extra-light-fill: #f5f7fc;
+    --light-fill: #f0f3f9;
+    --light-border: var(--el-border-color-light);
     --header-actions-border: inset 0 -1px 0 0 var(--el-border-color-lighter);
-    --aside-background: #f3f5f8;
+    --aside-background: #192b46;
+    --nav-text: #b9c7df;
+    --nav-heading: #8fa3c1;
+    --nav-active: #eff3ff;
+    --nav-active-text: #293d79;
+    --nav-hover: #263b5a;
+    --brand-accent: #b7d5fb;
+    --header-height: 64px;
     --loading-background: rgb(255 255 255 / 80%);
     --dark-border: #c7cfd9;
     --base-fill: #edf0f5;
-    --regular-text-color: #596577;
-    --light-border-color: #e5e9ee;
+    --regular-text-color: var(--el-text-color-regular);
+    --light-border-color: var(--el-border-color-light);
     --choose-account-background: var(--el-color-primary-light-9);
-    --email-scroll-content-color: #768193;
+    --email-scroll-content-color: #65748b;
     --email-hover-background: #f5f7fc;
     --form-desc-color: #687386;
     --login-switch-color: var(--el-color-primary);
     --scrollbar-track-color: #a8b1bf;
     --base-border-color: #dce1e8;
-    --secondary-text-color: #737d8c;
+    --secondary-text-color: var(--el-text-color-secondary);
     --message-block-color: transparent;
     --loading-hide-transition: opacity 200ms;
     --right-checked-background: #edf2fc;
@@ -168,6 +178,9 @@ html:root.dark {
     --el-text-color-primary: #e3e8f0;
     --el-text-color-regular: #b4bece;
     --el-text-color-secondary: #939fb2;
+    --el-color-success: #6fc6ab;
+    --el-color-success-dark-2: #6fc6ab;
+    --el-color-success-light-9: #203a35;
     --el-bg-color: #1b2029;
     --el-bg-color-overlay: #232a35;
     --el-fill-color-blank: #1b2029;
@@ -180,7 +193,12 @@ html:root.dark {
     --extra-light-fill: #181d26;
     --light-fill: #242c38;
     --light-border: #363f4e;
-    --aside-background: #161b23;
+    --aside-background: #111d30;
+    --nav-text: #a8b8cf;
+    --nav-heading: #7e93b1;
+    --nav-active: #2d405f;
+    --nav-active-text: #dce7ff;
+    --nav-hover: #20304a;
     --loading-background: rgb(20 25 34 / 75%);
     --dark-border: #515e72;
     --base-fill: #2b3442;
@@ -207,9 +225,26 @@ html:root.dark {
 
 .el-dialog {
     --el-dialog-border-radius: var(--radius-lg);
+    border: 1px solid var(--el-border-color-light);
 }
 
-.el-button { font-weight: 500; }
+.el-button {
+    font-weight: 500;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+    &:active:not(:disabled) { transform: translateY(1px); }
+}
+
+.el-dropdown__popper, .el-message-box {
+    border-radius: var(--radius-lg) !important;
+    box-shadow: 0 8px 24px rgb(15 29 52 / 8%), 0 24px 64px rgb(15 29 52 / 12%) !important;
+}
+
+.el-overlay { background-color: rgb(13 25 46 / 42%); }
+.el-message-box { padding: 24px !important; }
+.el-dropdown-menu__item { border-radius: var(--radius-sm); margin: 2px 6px; }
+.el-table th, .el-table td { font-variant-numeric: tabular-nums; }
+button { touch-action: manipulation; }
+svg { vertical-align: middle; }
 
 /* 用户开启“减少动效”时，关闭装饰性动画 */
 @media (prefers-reduced-motion: reduce) {

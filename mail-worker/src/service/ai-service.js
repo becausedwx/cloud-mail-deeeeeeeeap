@@ -13,9 +13,9 @@ const STRONG_CODE_LABEL_PATTERNS = [
 	'verification\\s+code',
 	'verify\\s+code',
 	'one[-\\s]?time\\s+code',
-	'otp',
-	'2fa',
-	'mfa',
+	'\\botp\\b',
+	'\\b2fa\\b',
+	'\\bmfa\\b',
 	'passcode',
 	'security\\s+code',
 	'auth(?:entication)?\\s+code',
@@ -313,7 +313,23 @@ const NEGATIVE_CONTEXT_RE = buildRe([
 ]);
 const URL_OR_EMAIL_RE = /(?:https?:\/\/|www\.)\S+|\b\S+@\S+\b/i;
 const CODE_TOKEN_RE = /(^|[^A-Za-z0-9])([A-Za-z0-9]{4,8})(?=$|[^A-Za-z0-9])/g;
-const SEPARATED_DIGIT_CODE_RE = /(^|[^A-Za-z0-9])(\d(?:(?:[ \t]*[-\u2013\u2014][ \t]*|[ \t])?\d){3,7})(?=$|[^A-Za-z0-9])/g;
+// Only join deliberate groups, not a code followed by its validity period.
+const SEPARATED_DIGIT_CODE_RE = /(^|[^A-Za-z0-9])(?:((?:\d{3}[ \t-]+\d{3}|\d{4}[ \t-]+\d{4}|\d{2}(?:[ \t-]+\d{2}){1,3}|\d(?:[ \t-]+\d){3,7})))(?=$|[^A-Za-z0-9])/g;
+
+function extractionText(value) {
+	return emailUtils.formatText(String(value || '').normalize('NFKC')
+		.replace(/[\u2010-\u2014\u2212]/g, '-'));
+}
+
+function currentMessageText(value) {
+	const lines = String(value || '').split(/\r?\n/);
+	const current = [];
+	for (const line of lines) {
+		if (/^\s*(?:On .+wrote:|在.+写道[：:]|-{2,}\s*(?:Original Message|Forwarded message)\s*-{2,})\s*$/i.test(line)) break;
+		if (!/^\s*>/.test(line)) current.push(line);
+	}
+	return extractionText(current.join('\n'));
+}
 
 function regexPositions(regex, text) {
 	const positions = [];
@@ -348,14 +364,11 @@ function quickHtmlText(html) {
 }
 
 export function normalizeCodeToken(token) {
-	const code = String(token || '').replace(/[\s-]/g, '').toUpperCase();
+	const code = extractionText(token).replace(/[\s-]/g, '').toUpperCase();
 	if (code.length < 4 || code.length > 8) {
 		return '';
 	}
 	if (!/\d/.test(code) || !/^[A-Z0-9]+$/.test(code)) {
-		return '';
-	}
-	if (/^[A-Z]+$/.test(code)) {
 		return '';
 	}
 	if (/^(.)\1+$/.test(code)) {
@@ -383,11 +396,12 @@ function collectCodeCandidates(text) {
 		while ((match = tokenRe.exec(text)) !== null) {
 			const raw = match[2];
 			const code = normalizeCodeToken(raw);
-			if (code) {
+			const index = match.index + match[1].length;
+			if (code && !insideUrlOrEmail(text, index)) {
 				candidates.push({
 					code,
 					raw,
-					index: match.index + match[1].length
+					index
 				});
 			}
 		}
@@ -463,7 +477,10 @@ function scoreCandidate(text, candidate, hintPositions, subjectLength) {
 	const directLabelNear = DIRECT_CODE_LABEL_RE.test(context);
 	const authPurposeNear = AUTH_PURPOSE_RE.test(context);
 	const actionNear = ACTION_RE.test(context);
-	const negativeContext = NEGATIVE_CONTEXT_RE.test(line) || insideUrlOrEmail(text, candidate.index);
+	// A reference in another sentence must not disqualify the actual login code.
+	const before = text.slice(0, candidate.index).split(/[.!?;\n。；！？]/).at(-1);
+	const after = text.slice(candidate.index).split(/[.!?;\n。；！？]/, 1)[0];
+	const negativeContext = NEGATIVE_CONTEXT_RE.test(before + after);
 	const nearestHintDistance = nearestDistance(hintPositions, candidate.index);
 	let score = 0;
 
@@ -516,23 +533,8 @@ function scoreCandidate(text, candidate, hintPositions, subjectLength) {
 	return score;
 }
 
-export function extractCodeByPattern(email) {
-	const subject = emailUtils.formatText(email?.subject || '');
-	const text = emailUtils.formatText(email?.text || '');
-	const rawHtml = email?.html || '';
-	const rawHtmlText = quickHtmlText(rawHtml);
-	const quickContent = [subject, text, rawHtmlText].filter(Boolean).join('\n').slice(0, CONTENT_LIMIT);
-
-	if (!hasExtractionSignal(quickContent)) {
-		return '';
-	}
-
-	const htmlText = rawHtml && (!text || hasExtractionSignal(rawHtmlText))
-		? emailUtils.htmlToText(rawHtml)
-		: '';
-	const body = [text, htmlText].filter(Boolean).join('\n');
+function extractFromText(subject, body) {
 	const content = [subject, body].filter(Boolean).join('\n').slice(0, CONTENT_LIMIT);
-
 	if (!content || !hasExtractionSignal(content)) {
 		return '';
 	}
@@ -544,14 +546,27 @@ export function extractCodeByPattern(email) {
 
 	const hintPositions = collectHintPositions(content);
 	const subjectLength = subject.length;
-	const [best] = candidates
-		.map(candidate => ({
-			...candidate,
-			score: scoreCandidate(content, candidate, hintPositions, subjectLength)
-		}))
-		.sort((a, b) => b.score - a.score || a.index - b.index);
+	let best;
+	for (const candidate of candidates) {
+		const score = scoreCandidate(content, candidate, hintPositions, subjectLength);
+		if (!best || score > best.score || (score === best.score && candidate.index < best.index)) {
+			best = {...candidate, score};
+		}
+	}
 
 	return best && best.score >= SCORE_THRESHOLD ? best.code : '';
+}
+
+export function extractCodeByPattern(email) {
+	const subject = extractionText(email?.subject);
+	const text = currentMessageText(email?.text);
+	const textCode = extractFromText(subject, text);
+	if (textCode) return textCode;
+
+	const rawHtml = email?.html || '';
+	if (!rawHtml || !hasExtractionSignal(subject + '\n' + quickHtmlText(rawHtml))) return '';
+	const htmlText = currentMessageText(emailUtils.htmlToText(rawHtml, {excludeQuoted: true}));
+	return extractFromText(subject, htmlText);
 }
 
 const aiService = {
@@ -573,9 +588,9 @@ const aiService = {
 		}
 
 		try {
-			const subject = email.subject || '';
-			const text = emailUtils.formatText(email.text || '');
-			const htmlText = emailUtils.htmlToText(email.html || '');
+			const subject = extractionText(email.subject);
+			const text = currentMessageText(email.text);
+			const htmlText = currentMessageText(emailUtils.htmlToText(email.html || '', {excludeQuoted: true}));
 			const body = (htmlText || text).slice(0, 6000);
 			const candidateContent = [subject, text, htmlText].filter(Boolean).join('\n').slice(0, CONTENT_LIMIT);
 			const candidateCodes = collectUniqueCodeCandidates(candidateContent);

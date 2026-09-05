@@ -69,9 +69,7 @@
                   <span>{{ $t('emailPrefix') }}</span>
                 </div>
                 <div class="forward">
-                  <el-button class="opt-button" size="small" type="primary" @click="openEmailPrefix">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openEmailPrefix">{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
             </div>
@@ -85,9 +83,7 @@
                 <div class="title-item"><span>{{ $t('websiteTitle') }}</span></div>
                 <div class="email-title">
                   <span>{{ setting.title }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="editTitleShow = true">
-                    <Icon icon="lsicon:edit-outline" width="16" height="16"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="editTitleShow = true">{{ $t('editSetting') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
@@ -114,12 +110,8 @@
                     </template>
                   </el-image>
                   <div class="background-btn">
-                    <el-button class="opt-button" size="small" type="primary" @click="openSetBackground">
-                      <Icon icon="lsicon:edit-outline" width="16" height="16"/>
-                    </el-button>
-                    <el-button class="opt-button" size="small" type="primary" @click="delBackground">
-                      <Icon icon="material-symbols:delete-outline-rounded" width="16" height="16"/>
-                    </el-button>
+                    <el-button class="opt-button" size="small" type="primary" plain @click="openSetBackground">{{ $t('editSetting') }}</el-button>
+                    <el-button class="opt-button" size="small" type="primary" plain @click="delBackground">{{ $t('delete') }}</el-button>
                   </div>
                 </div>
               </div>
@@ -186,22 +178,16 @@
                 </div>
                 <div v-else>
                   <el-button class="opt-button" style="margin-top: 0" @click="openResendList" size="small"
-                             type="primary">
-                    <Icon icon="ic:round-list" width="18" height="18"/>
-                  </el-button>
+                             type="primary" plain>{{ $t('manage') }}</el-button>
                   <el-button class="opt-button" style="margin-top: 0" @click="openResendForm" size="small"
-                             type="primary">
-                    <Icon icon="material-symbols:add-rounded" width="16" height="16"/>
-                  </el-button>
+                             type="primary" plain>{{ $t('add') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
                 <div><span>{{ $t('blackList') }}</span></div>
                 <div>
                   <el-button class="opt-button" style="margin-top: 0" @click="openBlackListForm" size="small"
-                             type="primary">
-                    <Icon icon="fluent:settings-48-regular" width="16" height="16"/>
-                  </el-button>
+                             type="primary" plain>{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
             </div>
@@ -220,9 +206,7 @@
                 </div>
                 <div class="r2domain">
                   <span>{{ setting.r2Domain || '' }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="r2DomainShow = true">
-                    <Icon icon="lsicon:edit-outline" width="16" height="16"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="r2DomainShow = true">{{ $t('editSetting') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
@@ -230,9 +214,7 @@
                   <span>{{ $t('s3Configuration') }}</span>
                 </div>
                 <div class="r2domain">
-                  <el-button class="opt-button" size="small" type="primary" @click="addS3Show = true">
-                    <Icon icon="fluent:settings-48-regular" width="16" height="16"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="addS3Show = true">{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
@@ -255,27 +237,21 @@
                 <div><span>{{ $t('tgBot') }}</span></div>
                 <div class="forward">
                   <span>{{ setting.tgBotStatus === 0 ? $t('enabled') : $t('disabled') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="openTgSetting">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openTgSetting">{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
                 <div><span>{{ $t('otherEmail') }}</span></div>
                 <div class="forward">
                   <span>{{ setting.forwardStatus === 0 ? $t('enabled') : $t('disabled') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="openThirdEmailSetting">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openThirdEmailSetting">{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
                 <div><span>{{ $t('forwardingRules') }}</span></div>
                 <div class="forward">
                   <span>{{ setting.ruleType === 0 ? $t('forwardAll') : $t('rules') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="openForwardRules">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openForwardRules">{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
             </div>
@@ -288,9 +264,7 @@
               <div class="setting-item">
                 <div><span>{{ $t('signUpVerification') }}</span></div>
                 <div>
-                  <el-button class="opt-button" size="small" type="primary" @click="openRegVerifyCount">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openRegVerifyCount">{{ $t('configureSetting') }}</el-button>
                   <el-select
                       @change="change"
                       :style="`width: ${ locale === 'en' ? 100 : 80 }px;`"
@@ -307,9 +281,7 @@
               <div class="setting-item">
                 <div><span>{{ $t('addEmailVerification') }}</span></div>
                 <div>
-                  <el-button class="opt-button" size="small" type="primary" @click="openAddVerifyCount">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openAddVerifyCount">{{ $t('configureSetting') }}</el-button>
                   <el-select
                       @change="change"
                       :style="`width: ${ locale === 'en' ? 100 : 80 }px;`"
@@ -327,24 +299,16 @@
                 <div><span>Site Key</span></div>
                 <div class="bot-verify">
                   <span>{{ turnstileConfiguredText('siteKey') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" plain @click="openTurnstileDialog">
-                    <Icon icon="lsicon:edit-outline" width="16" height="16"/>
-                  </el-button>
-                  <el-button class="opt-button" size="small" type="danger" plain :disabled="!turnstileHasKey('siteKey')" @click="clearTurnstileKey('siteKey')">
-                    <Icon icon="material-symbols:delete-outline" width="16" height="16"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openTurnstileDialog">{{ $t('editSetting') }}</el-button>
+                  <el-button class="opt-button" size="small" type="danger" plain :disabled="!turnstileHasKey('siteKey')" @click="clearTurnstileKey('siteKey')">{{ $t('delete') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
                 <div><span>Secret Key</span></div>
                 <div class="bot-verify">
                   <span>{{ turnstileConfiguredText('secretKey') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" plain @click="openTurnstileDialog">
-                    <Icon icon="lsicon:edit-outline" width="16" height="16"/>
-                  </el-button>
-                  <el-button class="opt-button" size="small" type="danger" plain :disabled="!turnstileHasKey('secretKey')" @click="clearTurnstileKey('secretKey')">
-                    <Icon icon="material-symbols:delete-outline" width="16" height="16"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openTurnstileDialog">{{ $t('editSetting') }}</el-button>
+                  <el-button class="opt-button" size="small" type="danger" plain :disabled="!turnstileHasKey('secretKey')" @click="clearTurnstileKey('secretKey')">{{ $t('delete') }}</el-button>
                 </div>
               </div>
             </div>
@@ -357,17 +321,13 @@
                 <div><span>{{ $t('noticePopup') }}</span></div>
                 <div class="forward">
                   <span>{{ setting.notice === 0 ? $t('enabled') : $t('disabled') }}</span>
-                  <el-button class="opt-button" size="small" type="primary" @click="openNoticePopupSetting">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openNoticePopupSetting">{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
               <div class="setting-item">
                 <div><span>{{ $t('popUp') }}</span></div>
                 <div class="forward">
-                  <el-button class="opt-button" size="small" type="primary" @click="openNoticePopup">
-                    <Icon icon="mynaui:click-solid" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openNoticePopup">{{ $t('preview') }}</el-button>
                 </div>
               </div>
             </div>
@@ -386,9 +346,7 @@
               <div class="setting-item">
                 <div><span>{{ $t('codeRecognitionRules') }}</span></div>
                 <div class="forward">
-                  <el-button class="opt-button" size="small" type="primary" @click="openAiCodeFilter">
-                    <Icon icon="fluent:settings-48-regular" width="18" height="18"/>
-                  </el-button>
+                  <el-button class="opt-button" size="small" type="primary" plain @click="openAiCodeFilter">{{ $t('configureSetting') }}</el-button>
                 </div>
               </div>
             </div>
@@ -1698,27 +1656,36 @@ function editSetting(settingForm, refreshStatus = true) {
   border-radius: var(--radius-lg);
   border: 1px solid var(--el-border-color-light);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 
 
 .card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 15px;
   font-weight: bold;
   padding: 16px 20px;
   border-bottom: 1px solid var(--el-border-color-light);
+  &::before { content: ''; width: 4px; height: 16px; border-radius: 2px; background: var(--el-color-primary-light-5); }
 }
 
 .card-content {
-  padding: 20px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
 }
 
 .setting-item {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 10px;
+  gap: 12px;
+  align-items: center;
+  min-height: 48px;
+  padding: 6px 0;
+  & + .setting-item { border-top: 1px solid var(--el-border-color-lighter); }
   font-weight: normal;
 
   > div:first-child {
@@ -1729,7 +1696,9 @@ function editSetting(settingForm, refreshStatus = true) {
 
   > div:last-child {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    min-width: 0;
     justify-items: flex-end;
     font-weight: normal;
   }
@@ -1759,7 +1728,7 @@ function editSetting(settingForm, refreshStatus = true) {
 
 .warning {
   margin-left: 2px;
-  color: grey;
+  color: var(--secondary-text-color);
   cursor: pointer;
 }
 
@@ -1954,6 +1923,11 @@ function editSetting(settingForm, refreshStatus = true) {
 
 .opt-button {
   width: fit-content !important;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .email-prefix {
@@ -2101,16 +2075,22 @@ form .el-button {
 :deep(.el-button--small) {
   margin-top: 2px !important;
   margin-bottom: 2px !important;
-  height: 24px;
+  min-height: 30px;
+  height: auto;
 }
 
 :deep(.el-select__wrapper) {
   min-height: 28px;
 }
 
-</style>
 
-<style>
-.el-popper.is-dark {
+@media (max-width: 600px) {
+  .card-content { padding: 14px; }
+  .card-title { padding: 14px; }
+  .personalized { grid-template-columns: 1fr; }
+  .personalized > div:last-child { justify-content: space-between; }
+  .background { width: min(220px, 100%); height: 124px; }
+  .background-btn { flex-shrink: 0; }
 }
+
 </style>

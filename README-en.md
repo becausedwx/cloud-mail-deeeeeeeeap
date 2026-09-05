@@ -37,9 +37,27 @@ With only one domain, you can create multiple different email addresses, similar
 - [Deployment Guide](https://doc.skymail.ink/en/)<br>
 
 
-| ![](/doc/demo/demo1.png) | ![](/doc/demo/demo2.png) |
-|--------------------------|--------------------------|
-| ![](/doc/demo/demo3.png) | ![](/doc/demo/demo4.png) |
+Current interface, captured locally with demonstration data. Screenshots contain no real mailbox data or credentials.
+
+The refreshed interface combines navy navigation, a paper-like workspace and consistent line icons, with light and dark themes, keyboard controls and mobile layouts. Website title, login background, opacity, language and announcement settings remain customizable.
+
+| Inbox | Verification codes |
+| :---: | :---: |
+| ![Inbox](doc/demo/inbox.png) | ![Verification codes](doc/demo/codes.png) |
+| **Maintenance** | **System settings** |
+| ![Health checks and maintenance actions](doc/demo/maintenance.png) | ![System settings](doc/demo/settings.png) |
+| **Login** | **Dark theme** |
+| ![Envelope-themed login](doc/demo/login.png) | ![Maintenance in dark mode](doc/demo/dark.png) |
+
+<details>
+<summary>Mobile interface</summary>
+
+<p>
+  <img src="doc/demo/codes-mobile.png" alt="Mobile verification codes" width="280" />
+  <img src="doc/demo/account-mobile.png" alt="Mobile account menu and quotas" width="280" />
+</p>
+
+</details>
 
 ## Features
 
@@ -57,7 +75,9 @@ With only one domain, you can create multiple different email addresses, similar
 
 - **📡 Open API**: Supports batch user creation via API and multi-condition email queries
 
-- **🔢 Verification Code Recognition**: Auto-detect codes via Workers AI
+- **🔢 Verification Code Recognition**: Local rules recognize multilingual labels, full-width characters and grouped digits without AI fees. Links, email addresses, common quoted replies and hidden HTML are excluded; successful plain-text extraction skips HTML parsing. Workers AI remains an optional fallback.
+
+- **Verification Code Center**: Click a card to copy or open the original email through Details. Codes automatically hide and stop copying 15 minutes after receipt, including when returning to the tab. This is a display window; the original email determines actual validity. Failed requests can be retried. Opening the list only reads data; administrators can rescan older emails from Maintenance.
 
 - **📈 Data Visualization**: Use ECharts to visualize system data, including user email growth.
 

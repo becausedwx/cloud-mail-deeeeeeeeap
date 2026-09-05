@@ -10,9 +10,9 @@
           <span class="sender-name">{{ form.name }}</span>
           <span class="send-email"><{{ form.sendEmail }}></span>
         </div>
-        <div @click="close" style="cursor: pointer;">
+        <button type="button" class="close-writer" :aria-label="$t('closeWindow')" @click="close">
           <Icon icon="material-symbols-light:close-rounded" width="22" height="22"/>
-        </div>
+        </button>
       </div>
       <div class="container">
         <el-input-tag  @add-tag="addTagChange" tag-type="primary" @input="inputChange" size="default" v-model="form.receiveEmail" >
@@ -718,15 +718,15 @@ function close() {
   display: flex;
   align-items: center;
   justify-content: center;
+  background: rgb(13 25 46 / 35%);
 
   .write-box {
     background: var(--el-bg-color);
-    width: min(1367px, calc(100% - 80px));
-    box-shadow: var(--el-box-shadow-light);
+    width: min(1120px, calc(100% - 80px));
+    box-shadow: 0 24px 80px rgb(9 20 39 / 24%);
     border: 1px solid var(--el-border-color-light);
-    transition: var(--el-transition-duration);
-    padding: 15px;
-    border-radius: 8px;
+    padding: 24px;
+    border-radius: 20px;
     display: grid;
     grid-template-rows: auto 1fr;
     overflow: hidden;
@@ -735,7 +735,7 @@ function close() {
       height: 100%;
       border-radius: 0;
       border: 0;
-      padding-top: 10px;
+      padding: 16px;
     }
 
     @media (min-width: 1025px) {
@@ -745,16 +745,18 @@ function close() {
     .title {
       display: flex;
       justify-content: space-between;
-      margin-bottom: 10px;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
 
       .title-left {
+        min-width: 0;
         align-items: center;
         display: grid;
         grid-template-columns: auto auto auto 1fr;
       }
 
-      .title-text {
-      }
+      .title-text { color: var(--el-color-primary); }
 
       .sender {
         margin-left: 8px;
@@ -766,7 +768,7 @@ function close() {
       }
 
       .send-email {
-        color: #999896;
+        color: var(--secondary-text-color);
         margin-left: 5px;
         white-space: nowrap;
         text-overflow: ellipsis;
@@ -786,8 +788,7 @@ function close() {
       grid-template-rows: auto auto 1fr auto;
       gap: 15px;
 
-      .item-title {
-      }
+      .item-title { color: var(--secondary-text-color); }
 
       .button-item {
         display: grid;
@@ -877,4 +878,6 @@ function close() {
 .icon {
   cursor: pointer;
 }
+.close-writer { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border-radius: var(--radius-md); color: var(--regular-text-color); cursor: pointer; }
+.close-writer:hover { background: var(--light-fill); color: var(--el-color-primary); }
 </style>

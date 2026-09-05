@@ -144,27 +144,29 @@ const handleResize = () => {
     background: #000000;
     opacity: 0.6;
     z-index: 10;
-    transition: all 300ms;
+    transition: opacity var(--transition-base);
   }
 }
 
 .block-hide {
   position: fixed;
   pointer-events: none;
-  transition: all 300ms;
+  transition: opacity var(--transition-base);
 }
 
 .show {
-  transition: all 100ms;
+  transition: transform var(--transition-base), opacity var(--transition-base);
   @media (max-width: 767px) {
     position: fixed;
     z-index: 100;
     width: 260px;
+    top: var(--header-height);
+    height: calc(100dvh - var(--header-height));
   }
 }
 
 .hide {
-  transition: all 100ms;
+  transition: transform var(--transition-base), opacity var(--transition-base);
   position: fixed;
   transform: translateX(-100%);
   opacity: 0;
@@ -178,11 +180,11 @@ const handleResize = () => {
 .main-box {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  height: calc(100% - 60px);
+  height: calc(100% - var(--header-height));
   min-width: 0;
   overflow: hidden;
   &.with-accounts {
-    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-columns: 228px minmax(0, 1fr);
     @media (max-width: 767px) { grid-template-columns: minmax(0, 1fr); }
   }
 }

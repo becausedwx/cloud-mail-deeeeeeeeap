@@ -22,8 +22,8 @@
               <button type="button" class="account-action" :aria-label="$t('copy') + ' ' + item.email" @click.stop="copyAccount(item.email)">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
               </button>
-              <el-dropdown v-if="!showNullSetting(item)">
-                <button type="button" class="account-action" :aria-label="$t('settings')"><Icon icon="fluent:settings-48-regular" width="18" height="18"/></button>
+              <el-dropdown v-if="!showNullSetting(item)" trigger="click">
+                <button type="button" class="account-action" :aria-label="$t('settings')"><Icon icon="cloud-mail:settings" width="18" height="18"/></button>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item v-if="hasPerm('email:send')" @click="openSetName(item)">{{ $t('rename') }}</el-dropdown-item>
@@ -520,7 +520,7 @@ function submit() {
 .account-box {
 
   border-right: 1px solid var(--el-border-color-light);
-  background-color: var(--el-bg-color);
+  background-color: var(--extra-light-fill);
   height: 100%;
   overflow: hidden;
 
@@ -539,9 +539,6 @@ function submit() {
     width: 100%;
     height: calc(100% - 56px);
     overflow: auto;
-    @media (max-width: 767px) {
-      height: calc(100% - 116px);
-    }
 
     .empty {
       display: flex;
@@ -554,7 +551,8 @@ function submit() {
       display: flex;
       justify-content: center;
       align-items: center;
-      padding: 10px 0;
+      padding: 16px 0;
+      font-size: 12px;
       color: var(--secondary-text-color);
     }
   }
@@ -569,11 +567,13 @@ function submit() {
     box-shadow: none;
     border: 1px solid transparent;
     border-radius: var(--radius-md);
-    padding: 12px 10px;
-    margin-bottom: 4px;
+    padding: 10px;
+    margin-bottom: 8px;
     margin-left: 10px;
     margin-right: 10px;
     cursor: pointer;
+    transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
+    &:hover { background: var(--el-bg-color); }
 
     .account {
       display: block;
@@ -582,7 +582,9 @@ function submit() {
       color: var(--el-text-color-primary);
       cursor: pointer;
       font-weight: 600;
-      margin-bottom: 8px;
+      min-height: 32px;
+      margin-bottom: 2px;
+      font-size: 13px;
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
@@ -597,7 +599,7 @@ function submit() {
       .settings {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 4px;
       }
 
       .send-email {
@@ -616,8 +618,10 @@ function submit() {
   }
 
   .item-choose {
-    background: var(--choose-account-background);
+    background: var(--el-bg-color);
     border-color: var(--el-color-primary-light-8);
+    box-shadow: var(--shadow-card);
+    .account { color: var(--el-color-primary); }
   }
 }
 
@@ -625,11 +629,12 @@ function submit() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   color: var(--secondary-text-color);
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
   &:hover { color: var(--el-color-primary); background: var(--base-fill); }
   &[aria-pressed="true"] { color: var(--el-color-primary); background: var(--el-color-primary-light-8); }
 }

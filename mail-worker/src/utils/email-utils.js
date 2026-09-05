@@ -34,7 +34,7 @@ const emailUtils = {
 			.trim();
 	},
 
-	htmlToText(content) {
+	htmlToText(content, { excludeQuoted = false } = {}) {
 		if (!content) return ''
 		try {
 			// linkedom innerText only breaks on a small block-element set; table cells,
@@ -48,6 +48,12 @@ const emailUtils = {
 				: `<!DOCTYPE html><html><body>${separated}</body></html>`;
 			const { document } = parseHTML(wrappedContent);
 			document.querySelectorAll('style, script, title').forEach(el => el.remove());
+			if (excludeQuoted) {
+				document.querySelectorAll('blockquote, .gmail_quote, .yahoo_quoted, [hidden], [aria-hidden="true"]').forEach(el => el.remove());
+				document.querySelectorAll('[style]').forEach(el => {
+					if (/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(el.getAttribute('style'))) el.remove();
+				});
+			}
 			let text = document.body.innerText;
 			return this.formatText(text);
 		} catch (e) {

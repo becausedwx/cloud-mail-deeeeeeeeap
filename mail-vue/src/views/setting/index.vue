@@ -7,15 +7,15 @@
         <div>
           <span v-if="setNameShow" class="edit-name-input">
             <el-input v-model="accountName"  ></el-input>
-            <span class="edit-name" @click="setName">
+            <button type="button" class="edit-name" @click="setName">
              {{$t('save')}}
-            </span>
+            </button>
           </span>
           <span v-else class="user-name">
             <span >{{ userStore.user.name }}</span>
-            <span class="edit-name" @click="showSetName">
+            <button type="button" class="edit-name" @click="showSetName">
              {{$t('change')}}
-            </span>
+            </button>
           </span>
         </div>
       </div>
@@ -272,6 +272,7 @@ function submitPwd() {
     border-radius: var(--radius-lg);
     background: var(--el-bg-color);
     margin-bottom: 20px;
+    box-shadow: var(--shadow-card);
   }
 
   @media (max-width: 767px) {
@@ -286,15 +287,15 @@ function submitPwd() {
   }
 
   .title {
-    font-size: 18px;
-    font-weight: bold;
+    font-size: 16px;
+    font-weight: 600;
   }
 
   .container {
     font-size: 14px;
     display: grid;
     gap: 20px;
-    margin-bottom: 40px;
+    margin-bottom: 20px;
 
     .item {
       display: grid;
@@ -304,6 +305,7 @@ function submitPwd() {
       position: relative;
       .user-name {
         display: grid;
+        align-items: center;
         grid-template-columns: auto 1fr;
         span:first-child {
           overflow: hidden;
@@ -321,6 +323,7 @@ function submitPwd() {
       }
 
       .edit-name {
+        min-height: 36px;
         color: var(--el-color-primary);
         padding-left: 10px;
         cursor: pointer;
@@ -342,7 +345,7 @@ function submitPwd() {
     display: flex;
     flex-direction: column;
     gap: 20px;
-    margin-bottom: 40px;
+    margin-bottom: 20px;
 
     .language-select {
       width: 100px;
@@ -354,7 +357,7 @@ function submitPwd() {
     display: flex;
     flex-direction: column;
     gap: 20px;
-    margin-bottom: 40px;
+    margin-bottom: 20px;
   }
 
   .del-email {

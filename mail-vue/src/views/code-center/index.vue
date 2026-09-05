@@ -33,6 +33,8 @@
             v-for="item in codes"
             :key="`${scope}-${item.emailId}`"
             role="button"
+            :aria-label="$t('copy') + ' ' + displayCode(item)"
+            :aria-disabled="item.isStale || !item.code"
             tabindex="0"
             @click="copyCode(item)"
             @keydown.enter="copyCode(item)"
@@ -42,7 +44,7 @@
             <div class="info-left">
               <div class="info-left-item">
                 <span class="code" :class="{hidden: item.isStale || !item.code}" @click.stop="copyCode(item)">{{ displayCode(item) }}</span>
-                <el-tag v-if="copiedEmailId === item.emailId" type="primary">{{ $t('copied') }}</el-tag>
+                <el-tag v-if="copiedEmailId === item.emailId" type="primary" role="status">{{ $t('copied') }}</el-tag>
               </div>
               <div class="info-left-item code-meta" :class="item.isStale ? 'expired' : ''">{{ codeStatusText(item) }}</div>
               <div class="info-left-item subject">{{ item.subject || $t('noSubject') }}</div>
@@ -57,11 +59,15 @@
           </div>
         </div>
       </div>
+      <div v-if="loadFailed" class="load-error" role="alert">
+        <span>{{ $t('listLoadFailed') }}</span>
+        <el-button :loading="loading || loadingMore" @click="getList(retryRefresh)">{{ $t('retry') }}</el-button>
+      </div>
       <div class="load-more" v-if="codes.length > 0">
         <el-button v-if="hasMore" :loading="loadingMore" @click="loadMore">{{ $t('loadMore') }}</el-button>
         <span v-else>{{ $t('noMoreData') }}</span>
       </div>
-      <div class="empty" v-if="codes.length === 0 && !first">
+      <div class="empty" v-if="codes.length === 0 && !first && !loadFailed">
         <el-empty :description="$t('noVerificationCodeFound')"/>
       </div>
     </el-scrollbar>
@@ -78,6 +84,7 @@ import {codeAllList, codeList} from "@/request/code.js";
 import {hasPerm} from "@/perm/perm.js";
 import {useEmailStore} from "@/store/email.js";
 import {useI18n} from "vue-i18n";
+import {formatShortDateTime} from "@/utils/day.js";
 
 defineOptions({
   name: 'code-center'
@@ -92,9 +99,14 @@ const loading = ref(false)
 const loadingMore = ref(false)
 const first = ref(true)
 const hasMore = ref(false)
+const loadFailed = ref(false)
 const copiedEmailId = ref(0)
 let copyTimer = 0
+let expiryTimer = 0
 let requestSeq = 0
+let listKey = ''
+let listParams = {}
+let retryRefresh = true
 const params = reactive({
   query: '',
   stale: 'fresh',
@@ -119,36 +131,78 @@ function search() {
 }
 
 function refresh() {
-  hasMore.value = false
-  getList(true)
+  return getList(true)
 }
 
 function loadMore() {
   if (!hasMore.value || loading.value || loadingMore.value || codes.length === 0) return
-  getList(false)
+  return getList(false)
 }
 
-function getList(refreshList = false) {
+async function getList(refreshList = false) {
   if (!refreshList && (loading.value || loadingMore.value)) return
-  const requestId = ++requestSeq
   const requestScope = scope.value
   const requestParams = {
-    ...params,
+    ...(refreshList ? params : listParams),
     emailId: refreshList ? 0 : codes.at(-1)?.emailId || 0
   }
+  const key = JSON.stringify([requestScope, requestParams.query, requestParams.stale, requestParams.timeSort, requestParams.size])
+  if (key === listKey && (loading.value || loadingMore.value)) return
+  if (key !== listKey) {
+    codes.length = 0
+    hasMore.value = false
+    first.value = true
+    copiedEmailId.value = 0
+    updateExpiry()
+  }
+  listKey = key
+  listParams = requestParams
+  const requestId = ++requestSeq
+  const requestedAt = Date.now()
   loading.value = refreshList
   loadingMore.value = !refreshList
-  requestList(requestScope, requestParams).then(data => {
+  loadFailed.value = false
+  retryRefresh = refreshList
+  try {
+    const data = await requestList(requestScope, requestParams)
     if (requestId !== requestSeq || requestScope !== scope.value) return
     if (refreshList) codes.length = 0
-    codes.push(...(data.list || []))
+    codes.push(...(data.list || []).map(item => {
+      // Use the server's remaining window, with request latency deducted; local clock offsets cancel out.
+      const seconds = Number(item.expiresInSeconds ?? (item.expiresInMinutes ?? 0) * 60)
+      return {...item, expiresAt: requestedAt + (Number.isFinite(seconds) ? Math.max(0, seconds) * 1000 : 0)}
+    }))
+    updateExpiry()
     hasMore.value = !!data.hasMore
-    first.value = false
-  }).finally(() => {
+  } catch {
+    if (requestId === requestSeq) loadFailed.value = true
+  } finally {
     if (requestId !== requestSeq) return
+    first.value = false
     loading.value = false
     loadingMore.value = false
-  })
+  }
+}
+
+function updateExpiry() {
+  clearTimeout(expiryTimer)
+  const now = Date.now()
+  let nextUpdate = Infinity
+  for (const item of codes) {
+    const remaining = item.isStale ? 0 : Math.max(0, item.expiresAt - now)
+    item.expiresInMinutes = Math.ceil(remaining / 60000)
+    if (remaining <= 0) {
+      item.isStale = true
+      item.codeHidden = true
+      item.code = ''
+      if (copiedEmailId.value === item.emailId) copiedEmailId.value = 0
+    } else {
+      nextUpdate = Math.min(nextUpdate, remaining - (item.expiresInMinutes - 1) * 60000)
+    }
+  }
+  if (!document.hidden && Number.isFinite(nextUpdate)) {
+    expiryTimer = window.setTimeout(updateExpiry, Math.max(1, nextUpdate))
+  }
 }
 
 async function writeClipboard(text) {
@@ -172,12 +226,13 @@ async function writeClipboard(text) {
 }
 
 async function copyCode(item) {
-  const code = typeof item === 'string' ? item : item?.code
+  updateExpiry()
+  const code = item?.code
   if (!code || item?.isStale) return
 
   try {
     await writeClipboard(code)
-    copiedEmailId.value = typeof item === 'object' ? item.emailId : 0
+    copiedEmailId.value = item.emailId
     if (copyTimer) clearTimeout(copyTimer)
     copyTimer = window.setTimeout(() => {
       copiedEmailId.value = 0
@@ -204,7 +259,7 @@ function openDetail(item) {
 }
 
 function displayTime(time) {
-  return time ? time.replace('T', ' ').slice(0, 16) : '-'
+  return time ? formatShortDateTime(time) : '-'
 }
 
 function codeStatusText(item) {
@@ -228,8 +283,11 @@ function displayCode(item) {
 onBeforeUnmount(() => {
   requestSeq++
   if (copyTimer) clearTimeout(copyTimer)
+  clearTimeout(expiryTimer)
+  document.removeEventListener('visibilitychange', updateExpiry)
 })
 
+document.addEventListener('visibilitychange', updateExpiry)
 getList(true)
 </script>
 
@@ -323,9 +381,9 @@ getList(true)
     background: var(--el-bg-color);
     border-radius: var(--radius-lg);
     border: 1px solid var(--el-border-color);
-    box-shadow: none;
+    box-shadow: var(--shadow-card);
     transition: border-color var(--transition-base), box-shadow var(--transition-base),
-      transform var(--transition-base), opacity var(--transition-base);
+      opacity var(--transition-base);
     padding: 22px;
     cursor: pointer;
 
@@ -375,10 +433,12 @@ getList(true)
 
     .code {
       font-weight: bold;
-      font-size: 28px;
+      font-size: 32px;
       line-height: 1.4;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.06em;
+      color: var(--el-color-primary);
+      font-variant-numeric: tabular-nums;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -404,6 +464,9 @@ getList(true)
   }
 
   .subject {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--el-border-color);
     font-weight: 500;
     display: block;
     overflow: hidden;
@@ -445,6 +508,16 @@ getList(true)
   justify-content: center;
   align-items: center;
   padding: 5px 0 20px;
+  color: var(--el-text-color-secondary);
+}
+
+.load-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
   color: var(--el-text-color-secondary);
 }
 

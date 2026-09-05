@@ -1,8 +1,10 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import { emailConst, isDel } from '../const/entity-const';
 import { truncateLikeTerm } from '../utils/sql-utils';
 
 export const CODE_STALE_MINUTES = 15;
+dayjs.extend(utc);
 
 function normalizePageSize(size) {
 	const pageSize = Number(size);
@@ -30,16 +32,18 @@ function normalizeStale(stale) {
 
 function mapCodeRow(row) {
 	const createTime = row.createTime || '';
-	const ageMinutes = createTime ? dayjs().diff(dayjs(createTime), 'minute') : null;
-	const normalizedAge = Number.isFinite(ageMinutes) ? Math.max(0, ageMinutes) : null;
-	const isStale = normalizedAge !== null ? normalizedAge >= CODE_STALE_MINUTES : false;
+	const createdAt = createTime ? dayjs.utc(createTime).valueOf() : NaN;
+	const ageMs = Number.isFinite(createdAt) ? Math.max(0, Date.now() - createdAt) : null;
+	const expiresInSeconds = ageMs === null ? 0 : Math.max(0, CODE_STALE_MINUTES * 60 - ageMs / 1000);
+	const isStale = expiresInSeconds <= 0;
 	return {
 		...row,
 		code: isStale ? '' : row.code,
 		codeHidden: isStale,
 		isStale,
-		ageMinutes: normalizedAge,
-		expiresInMinutes: normalizedAge !== null ? Math.max(0, CODE_STALE_MINUTES - normalizedAge) : null
+		ageMinutes: ageMs === null ? null : Math.floor(ageMs / 60000),
+		expiresInMinutes: Math.ceil(expiresInSeconds / 60),
+		expiresInSeconds
 	};
 }
 
@@ -93,11 +97,11 @@ function buildConditions(params, options = {}) {
 	}
 
 	if (stale === 'fresh') {
-		conditions.push(`datetime(e.create_time) >= datetime('now', '-${CODE_STALE_MINUTES} minutes')`);
+		conditions.push(`datetime(e.create_time) > datetime('now', '-${CODE_STALE_MINUTES} minutes')`);
 	}
 
 	if (stale === 'stale') {
-		conditions.push(`datetime(e.create_time) < datetime('now', '-${CODE_STALE_MINUTES} minutes')`);
+		conditions.push(`datetime(e.create_time) <= datetime('now', '-${CODE_STALE_MINUTES} minutes')`);
 	}
 
 	return {

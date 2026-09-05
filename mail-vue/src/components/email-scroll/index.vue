@@ -2,6 +2,7 @@
   <div class="email-container">
     <div class="header-actions">
       <el-checkbox
+          :aria-label="t('selectAll')"
           v-model="checkAll"
           :indeterminate="isIndeterminate"
           :disabled="!emailList.length || loading"
@@ -48,6 +49,8 @@
                  一次渲染里每行都读写同一个槽；withMemo 只比对依赖数组、不校验 key，
                  命中就返回同一个 vnode 对象，整段列表会塌成重复行并残留孤儿 DOM -->
             <div :class="'email-row ' + props.type"
+                 role="link" tabindex="0"
+                 @keydown.enter.self.prevent="jumpDetails(item)"
                  :data-checked="item.checked"
                  :data-unread="showUnread && item.unread === EmailUnreadEnum.UNREAD"
                  @click="jumpDetails(item)"
@@ -60,11 +63,12 @@
                  :style="item.rightChecked ? 'background: var(--right-checked-background)' : ''"
             >
               <el-checkbox :class=" props.type === 'all-email' ? 'all-email-checkbox' : 'checkbox'"
+                           :aria-label="t('select') + ' ' + item.subject"
                            v-model="item.checked" @click.stop></el-checkbox>
-              <div @click.stop="starChange(item)" class="pc-star" v-if="showStar">
+              <button type="button" @click.stop="starChange(item)" class="pc-star" v-if="showStar" :aria-label="t('starred')" :aria-pressed="!!item.isStar">
                 <Icon v-if="item.isStar" icon="fluent-color:star-16" width="20" height="20"/>
                 <Icon v-else icon="solar:star-line-duotone" width="18" height="18"/>
-              </div>
+              </button>
               <div v-if="!showStar"></div>
               <div class="title title-column">
 
@@ -95,7 +99,7 @@
                   <div class="email-text">
                     <span class="email-subject" :style="(item.unread === EmailUnreadEnum.UNREAD && showUnread)  ? 'font-weight: bold' : ''">
                       <div class="unread" v-if="!isMobile && (item.unread === EmailUnreadEnum.UNREAD && showUnread) "/>
-                      <span v-if="item.code" class="code-tag" @click.stop="copyCode(item.code)">[{{ t('codeLabel') }}{{ item.code }}]</span>
+                      <button v-if="item.code" type="button" class="code-tag" :aria-label="t('copy') + ' ' + item.code" @click.stop="copyCode(item.code)">{{ item.code }}</button>
                       <span class="subject-text">
                         <slot name="subject" :email="item" >
                           {{ item.subject || '\u200B' }}
@@ -1192,8 +1196,10 @@ function loadData() {
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
-      transition: all 300ms;
-      line-height: 12px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      line-height: 20px;
       max-width: 300px;
       min-width: 0;
 
@@ -1201,15 +1207,8 @@ function loadData() {
         max-width: 280px;
       }
 
-      span:first-child {
-        position: relative;
-      }
-
-      span:last-child {
-        margin-left: 5px;
-        position: relative;
-        bottom: 5px;
-      }
+      span:first-child { flex-shrink: 0; }
+      span:last-child { overflow: hidden; text-overflow: ellipsis; }
     }
   }
 
@@ -1242,8 +1241,10 @@ function loadData() {
 
   .title {
     flex: 1;
+    min-width: 0;
     display: grid;
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+    gap: 16px;
     @media (max-width: 1366px) {
       padding-right: 15px;
     }
@@ -1255,7 +1256,7 @@ function loadData() {
     .email-sender {
       color: var(--el-text-color-primary);
       display: grid;
-      grid-template-columns: auto 1fr auto;
+      grid-template-columns: auto minmax(0, 1fr) auto;
 
       .email-status {
         display: flex;
@@ -1300,6 +1301,8 @@ function loadData() {
       }
 
       .phone-time {
+        color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums;
         font-weight: normal;
         font-size: 12px;
         @media (min-width: 1367px) {
@@ -1334,7 +1337,7 @@ function loadData() {
 
     .email-text {
       display: grid;
-      grid-template-columns: auto 1fr;
+      grid-template-columns: minmax(0, auto) minmax(0, 1fr);
       @media (max-width: 1366px) {
         grid-template-columns: 1fr;
       }
@@ -1356,8 +1359,12 @@ function loadData() {
         max-width: 170px;
         height: 20px;
         line-height: 20px;
-        font-size: 14px;
-        color: var(--el-text-color-primary);
+        font-size: 12px;
+        font-family: ui-monospace, Consolas, monospace;
+        padding: 0 6px;
+        border-radius: 4px;
+        background: var(--el-color-primary-light-9);
+        color: var(--el-color-primary);
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
@@ -1387,6 +1394,8 @@ function loadData() {
 
 
   .email-right {
+    color: var(--secondary-text-color);
+    font-variant-numeric: tabular-nums;
     text-align: right;
     font-size: 12px;
     white-space: nowrap;
@@ -1404,18 +1413,8 @@ function loadData() {
     }
   }
 
-  /* 未读行左侧 3px 主色指示条。必须占满整行高且不留圆角：
-     行与行之间没有间隙，只有铺满才能让连续的未读邮件连成一整条，
-     居中的短条会在每行上下各留一段空白，视觉上碎成一截一截 */
-  &[data-unread="true"]::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 3px;
-    height: 100%;
-    background: var(--el-color-primary-light-5);
-  }
+  &[data-unread="true"] { background: var(--extra-light-fill); }
+  &:focus-visible { outline-offset: -2px; }
 
   &:hover {
     background-color: var(--email-hover-background);
@@ -1436,7 +1435,15 @@ function loadData() {
 
 .pc-star {
   display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  flex-shrink: 0;
   width: 40px;
+  color: var(--secondary-text-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  &:hover { color: var(--el-color-primary); background: var(--base-fill); }
 }
 
 @media (max-width: 1366px) {
@@ -1484,13 +1491,15 @@ function loadData() {
   .header-right {
     display: grid;
     grid-template-columns: auto auto;
-    align-items: start;
+    align-items: center;
     height: 100%;
     color: var(--regular-text-color);
 
     .email-count {
       white-space: nowrap;
-      margin-top: 6px;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      color: var(--secondary-text-color);
     }
   }
 
@@ -1507,6 +1516,8 @@ function loadData() {
     box-sizing: content-box;
     border-radius: var(--radius-sm);
     outline-offset: -2px;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+    &:hover { background: var(--light-fill); color: var(--el-color-primary); }
   }
 
   :deep(.action-icon:focus-visible) {

@@ -32,6 +32,24 @@ function createDbRecorder(resultsList = []) {
 }
 
 describe('code service', () => {
+	it('uses UTC reception time and hides codes at the exact display-window boundary', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-09-05T08:15:00Z'));
+		try {
+			const recorder = createDbRecorder([
+				{ emailId: 3, code: '483920', createTime: '2026-09-05 08:00:01' },
+				{ emailId: 2, code: '729104', createTime: '2026-09-05 08:00:00' },
+				{ emailId: 1, code: '615802', createTime: 'invalid' }
+			]);
+			const result = await codeService.list({ env: { db: recorder.db } }, { stale: 'all' }, 1);
+			expect(result.list[0]).toMatchObject({ code: '483920', isStale: false, expiresInSeconds: 1, expiresInMinutes: 1 });
+			expect(result.list[1]).toMatchObject({ code: '', isStale: true, expiresInSeconds: 0, expiresInMinutes: 0 });
+			expect(result.list[2]).toMatchObject({ code: '', isStale: true, expiresInSeconds: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('lists current user verification codes with bound filters and capped page size', async () => {
 		const recorder = createDbRecorder([]);
 		const c = { env: { db: recorder.db } };
@@ -47,7 +65,7 @@ describe('code service', () => {
 		const statement = recorder.statements.find(item => item.sql.includes('e.code AS code'));
 		expect(statement.sql).toContain('e.user_id = ?');
 		expect(statement.sql).toContain('LOWER(e.code) LIKE ?');
-		expect(statement.sql).toContain("datetime(e.create_time) >= datetime('now', '-15 minutes')");
+		expect(statement.sql).toContain("datetime(e.create_time) > datetime('now', '-15 minutes')");
 		expect(statement.sql).not.toContain("123456' OR 1=1 --");
 		expect(statement.bindings).toContain(42);
 		expect(statement.bindings).toContain("%123456' or 1=1 --%");
@@ -64,7 +82,7 @@ describe('code service', () => {
 		expect(statement.sql).toContain('LEFT JOIN user u ON u.user_id = e.user_id');
 		expect(statement.sql).toContain('u.email AS userEmail');
 		expect(statement.sql).not.toContain('e.user_id = ?');
-		expect(statement.sql).not.toContain("datetime(e.create_time) >=");
+		expect(statement.sql).not.toContain("datetime(e.create_time) >");
 		expect(result.list[0].userEmail).toBe('u@example.com');
 		expect(result.list[0].isStale).toBe(false);
 		expect(result.list[0].expiresInMinutes).toBe(CODE_STALE_MINUTES);
@@ -93,7 +111,7 @@ describe('code service', () => {
 		await codeService.list(c, { size: 10, emailId: 0, timeSort: 0 }, 1);
 
 		const statement = recorder.statements.find(item => item.sql.includes('e.code AS code'));
-		expect(statement.sql).toContain("datetime(e.create_time) >= datetime('now', '-15 minutes')");
+		expect(statement.sql).toContain("datetime(e.create_time) > datetime('now', '-15 minutes')");
 	});
 
 	it('hides expired code values in stale or all views', async () => {

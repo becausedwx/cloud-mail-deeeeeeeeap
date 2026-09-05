@@ -1,131 +1,79 @@
 <template>
-  <div v-if="loading && first" class="maintenance-loading">
-    <Loading/>
-  </div>
+  <div v-if="loading && first" class="maintenance-loading"><Loading/></div>
   <el-scrollbar v-else class="scrollbar">
-    <div class="maintenance">
-      <div class="header-actions">
-        <Icon class="icon" icon="ion:reload" width="18" height="18" @click="refresh"/>
-        <span>{{ $t('maintenanceDesc') }}</span>
+    <div class="maintenance" :aria-busy="loading">
+      <div class="maintenance-heading">
+        <p>{{ $t('maintenanceDesc') }}</p>
+        <el-button :loading="loading" :disabled="!!repairing" @click="refresh">{{ $t('setupRefreshStatus') }}</el-button>
       </div>
+      <el-alert v-if="loadFailed" :title="$t('listLoadFailed')" type="error" :closable="false" show-icon/>
+      <section v-if="health.checks" class="panel health-panel">
+        <div class="panel-heading">
+          <h2>{{ $t('healthIssues') }}</h2>
+          <span class="health-summary">{{ $t('healthSummary', {passed: healthyCount, total: health.checks.length}) }}</span>
+        </div>
+        <ul class="health-checks">
+          <li v-for="check in health.checks" :key="check.key" class="health-check">
+            <div class="check-heading">
+              <h3>{{ checkTitles[check.key] ? $t(checkTitles[check.key]) : check.key }}</h3>
+              <span class="check-status" :class="check.ok ? 'is-ok' : 'needs-attention'">
+                <span aria-hidden="true">{{ check.ok ? '✓' : '!' }}</span>
+                {{ check.ok ? $t('normal') : $t('warning') }}
+              </span>
+            </div>
+            <p>{{ check.message }}</p>
+          </li>
+        </ul>
+      </section>
 
-      <div class="number">
-        <div class="number-item" v-for="item in summaryCards" :key="item.key">
-          <div class="top">
-            <div class="left">
-              <div>{{ item.title }}</div>
-              <div>
-                <el-tag :type="item.ok ? 'success' : 'danger'">
-                  {{ item.ok ? $t('normal') : $t('warning') }}
-                </el-tag>
-              </div>
-            </div>
-            <div class="right">
-              <div class="count-icon">
-                <Icon :icon="item.icon" width="25" height="25"/>
-              </div>
-            </div>
+      <div v-if="health.lastAction" class="action-result" role="status">{{ actionResultText(health.lastAction) || $t('repairSuccess') }}</div>
+      <div class="maintenance-actions">
+        <section v-for="group in actionGroups" :key="group.title" class="panel action-panel">
+          <div class="action-heading"><span class="action-mark"><Icon :icon="group.icon" width="22" height="22"/></span><h2>{{ $t(group.title) }}</h2></div>
+          <p class="panel-desc">{{ $t(group.description) }}</p>
+          <div v-if="canRepair" class="repair-actions">
+            <el-button v-for="[action, label] in group.actions" :key="action"
+                :loading="repairing === action" :disabled="loading || (!!repairing && repairing !== action)"
+                :type="action === 'codes-clear-stale' ? 'danger' : ''" plain @click="repair(action)">
+              {{ $t(label) }}
+            </el-button>
           </div>
-          <div class="desc">{{ item.message }}</div>
-        </div>
+          <p v-else class="panel-desc">{{ $t('unauthorized') }}</p>
+          <details v-if="canRepair && group.title === 'deliveryMaintenance'" class="manual-actions">
+            <summary>{{ $t('manualDelivery') }}</summary>
+            <p class="panel-desc">{{ $t('manualDeliveryDesc') }}</p>
+            <div class="repair-actions">
+              <el-button v-for="[action, label] in manualActions" :key="action" type="danger" plain
+                  :loading="repairing === action" :disabled="loading || (!!repairing && repairing !== action)" @click="repair(action)">
+                {{ $t(label) }}
+              </el-button>
+            </div>
+          </details>
+        </section>
       </div>
 
-      <div class="panel">
-        <div class="panel-title">{{ $t('healthIssues') }}</div>
-        <el-table :data="health.checks || []" table-layout="fixed" style="width: 100%">
-          <el-table-column :label="$t('tabStatus')" width="90">
-            <template #default="props">
-              <el-tag :type="props.row.ok ? 'success' : 'danger'">
-                {{ props.row.ok ? $t('normal') : $t('warning') }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="key" :label="$t('item')" width="150"/>
-          <el-table-column prop="message" :label="$t('description')" min-width="260" show-overflow-tooltip/>
-        </el-table>
-      </div>
-
-      <div class="panel action-panel">
-        <div class="panel-title">{{ $t('safeRepair') }}</div>
-        <div class="panel-desc">{{ $t('safeRepairDesc') }}</div>
-        <div v-if="canRepair" class="repair-actions">
-          <button class="repair-btn is-safe" :disabled="repairing === 'schema'" @click="repair('schema')">
-            <Icon icon="fluent:wrench-20-regular" width="15" height="15"/>
-            <span>{{ $t('repairSchema') }}</span>
-          </button>
-          <button class="repair-btn is-safe" :disabled="repairing === 'indexes'" @click="repair('indexes')">
-            <Icon icon="fluent:wrench-20-regular" width="15" height="15"/>
-            <span>{{ $t('repairIndexes') }}</span>
-          </button>
-          <button class="repair-btn is-caution" :disabled="repairing === 'delivery-reconcile'" @click="repair('delivery-reconcile')">
-            <Icon icon="fluent:arrow-reset-20-regular" width="15" height="15"/>
-            <span>{{ $t('reconcileDelivery') }}</span>
-          </button>
-          <button class="repair-btn is-caution" :disabled="repairing === 'receive-recover'" @click="repair('receive-recover')">
-            <Icon icon="fluent:arrow-download-20-regular" width="15" height="15"/>
-            <span>{{ $t('recoverReceive') }}</span>
-          </button>
-          <button class="repair-btn is-risky" :disabled="repairing === 'delivery-ack-unknown'" @click="repair('delivery-ack-unknown')">
-            <Icon icon="fluent:checkmark-circle-20-regular" width="15" height="15"/>
-            <span>{{ $t('ackUnknownDelivery') }}</span>
-          </button>
-          <button class="repair-btn is-risky" :disabled="repairing === 'delivery-fail-unknown'" @click="repair('delivery-fail-unknown')">
-            <Icon icon="fluent:dismiss-circle-20-regular" width="15" height="15"/>
-            <span>{{ $t('failUnknownDelivery') }}</span>
-          </button>
-          <button class="repair-btn is-caution" :disabled="repairing === 'search'" @click="repair('search')">
-            <Icon icon="fluent:search-sparkle-20-regular" width="15" height="15"/>
-            <span>{{ $t('rebuildSearch') }}</span>
-          </button>
-        </div>
-        <el-empty v-else :description="$t('unauthorized')" :image-size="80"/>
-      </div>
-
-      <div class="panel action-panel">
-        <div class="panel-title">{{ $t('codeMaintenance') }}</div>
-        <div class="panel-desc">{{ $t('codeMaintenanceDesc') }}</div>
-        <div v-if="canRepair" class="repair-actions">
-          <button class="repair-btn is-safe" :disabled="repairing === 'codes-rescan'" @click="repair('codes-rescan')">
-            <Icon icon="fluent:scan-dash-20-regular" width="15" height="15"/>
-            <span>{{ $t('rescanCodes') }}</span>
-          </button>
-          <button class="repair-btn is-caution" :disabled="repairing === 'codes-clean'" @click="repair('codes-clean')">
-            <Icon icon="fluent:paint-brush-20-regular" width="15" height="15"/>
-            <span>{{ $t('cleanFalseCodes') }}</span>
-          </button>
-          <button class="repair-btn is-risky" :disabled="repairing === 'codes-clear-stale'" @click="repair('codes-clear-stale')">
-            <Icon icon="fluent:delete-20-regular" width="15" height="15"/>
-            <span>{{ $t('clearStaleCodes') }}</span>
-          </button>
-        </div>
-        <el-empty v-else :description="$t('unauthorized')" :image-size="80"/>
-        <div v-if="health.lastAction" class="action-result">
-          {{ actionResultText(health.lastAction) }}
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title">{{ $t('diagnosticDetails') }}</div>
-        <el-descriptions :column="detailColumn" border>
-          <el-descriptions-item label="Email Total">{{ health.details?.emailTotal ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="Search Rows">{{ health.details?.emailSearchRows ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="Delivery Attempts">{{ health.details?.deliveryAttempts?.total ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="UNKNOWN">{{ health.details?.deliveryAttempts?.counts?.UNKNOWN ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="PENDING_ACK">{{ health.details?.deliveryAttempts?.counts?.PENDING_ACK ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="Duration">{{ health.details?.durationMs ?? '-' }}ms</el-descriptions-item>
-          <el-descriptions-item label="Uses Index">{{ health.details?.usesIndex ? 'Yes' : 'No' }}</el-descriptions-item>
-          <el-descriptions-item label="Missing Columns">{{ joinList(health.details?.missingEmailColumns) }}</el-descriptions-item>
-          <el-descriptions-item label="Missing Indexes">{{ joinList(health.details?.missingIndexes) }}</el-descriptions-item>
-        </el-descriptions>
-        <div class="query-plan">{{ health.details?.queryPlan || '-' }}</div>
-      </div>
+      <details v-if="health.details" class="panel diagnostics">
+        <summary>{{ $t('diagnosticDetails') }}</summary>
+        <dl class="diagnostic-grid">
+          <div><dt>{{ $t('diagnosticEmailTotal') }}</dt><dd>{{ health.details.emailTotal ?? '—' }}</dd></div>
+          <div><dt>{{ $t('diagnosticSearchRows') }}</dt><dd>{{ health.details.emailSearchRows ?? '—' }}</dd></div>
+          <div><dt>{{ $t('diagnosticAttempts') }}</dt><dd>{{ health.details.deliveryAttempts?.total ?? '—' }}</dd></div>
+          <div><dt>{{ $t('diagnosticUnknown') }}</dt><dd>{{ health.details.deliveryAttempts?.counts?.UNKNOWN ?? '—' }}</dd></div>
+          <div><dt>{{ $t('diagnosticPending') }}</dt><dd>{{ health.details.deliveryAttempts?.counts?.PENDING_ACK ?? '—' }}</dd></div>
+          <div><dt>{{ $t('diagnosticDuration') }}</dt><dd>{{ health.details.durationMs ?? '—' }} ms</dd></div>
+          <div><dt>{{ $t('diagnosticIndex') }}</dt><dd>{{ health.details.usesIndex == null ? '—' : health.details.usesIndex ? $t('yes') : $t('no') }}</dd></div>
+          <div><dt>{{ $t('diagnosticColumns') }}</dt><dd>{{ joinList(health.details.missingEmailColumns) }}</dd></div>
+          <div><dt>{{ $t('diagnosticIndexes') }}</dt><dd>{{ joinList(health.details.missingIndexes) }}</dd></div>
+        </dl>
+        <pre class="query-plan">{{ health.details.queryPlan || '—' }}</pre>
+      </details>
     </div>
   </el-scrollbar>
 </template>
 
 <script setup>
 import {computed, defineOptions, ref} from "vue";
-import {Icon} from "@iconify/vue";
+import {Icon} from '@iconify/vue';
 import {ElMessage, ElMessageBox} from "element-plus";
 import Loading from "@/components/loading/index.vue";
 import {maintenanceHealth, maintenanceRepair} from "@/request/maintenance.js";
@@ -141,42 +89,60 @@ const loading = ref(true)
 const first = ref(true)
 const repairing = ref('')
 const health = ref({})
-const detailColumn = window.innerWidth < 767 ? 1 : 2
+const loadFailed = ref(false)
 const canRepair = computed(() => hasPerm('maintenance:repair'))
 
-const summaryCards = computed(() => {
-  const checks = health.value.checks || []
-  const find = key => checks.find(item => item.key === key) || {ok: false, message: '-'}
-  return [
-    {key: 'd1', title: 'D1', icon: 'fluent:database-20-regular', ...find('d1')},
-    {key: 'kv', title: 'KV', icon: 'carbon:data-base-alt', ...find('kv')},
-    {key: 'schema', title: t('databaseSchema'), icon: 'eos-icons:system-ok-outlined', ...find('schema')},
-    {key: 'indexes', title: t('databaseIndexes'), icon: 'fluent:flash-20-regular', ...find('indexes')}
-  ]
-})
-
-function refresh() {
-  loading.value = true
-  maintenanceHealth().then(data => {
-    health.value = data
-    first.value = false
-  }).finally(() => {
-    loading.value = false
-  })
+const healthyCount = computed(() => (health.value.checks || []).filter(check => check.ok).length)
+const actionGroups = [
+  {title: 'safeRepair', icon: 'cloud-mail:tools', description: 'safeRepairDesc', actions: [
+    ['schema', 'repairSchema'], ['indexes', 'repairIndexes'], ['search', 'rebuildSearch']
+  ]},
+  {title: 'deliveryMaintenance', icon: 'cloud-mail:send', description: 'deliveryMaintenanceDesc', actions: [
+    ['delivery-reconcile', 'reconcileDelivery'], ['receive-recover', 'recoverReceive']
+  ]},
+  {title: 'codeMaintenance', icon: 'cloud-mail:code', description: 'codeMaintenanceDesc', actions: [
+    ['codes-rescan', 'rescanCodes'], ['codes-clean', 'cleanFalseCodes'], ['codes-clear-stale', 'clearStaleCodes']
+  ]}
+]
+const manualActions = [['delivery-ack-unknown', 'ackUnknownDelivery'], ['delivery-fail-unknown', 'failUnknownDelivery']]
+const checkTitles = {
+  d1: 'setupCheckD1', kv: 'setupCheckKv', r2: 'oss', cloudflareEmail: 'cloudflareEmailBinding',
+  schema: 'databaseSchema', indexes: 'databaseIndexes', emailSearch: 'searchTable',
+  deliveryAttempts: 'deliveryMaintenance', settingCache: 'settingsCache'
 }
 
-function repair(action) {
-  ElMessageBox.confirm(repairConfirmText(action), t('warning'), {
-    type: 'warning'
-  }).then(() => {
-    repairing.value = action
-    maintenanceRepair(action).then(data => {
-      health.value = data
-      ElMessage({message: actionResultText(data.lastAction) || t('repairSuccess'), type: 'success'})
-    }).finally(() => {
-      repairing.value = ''
-    })
-  })
+async function refresh() {
+  if (loading.value && !first.value) return
+  loading.value = true
+  loadFailed.value = false
+  try {
+    health.value = await maintenanceHealth()
+  } catch {
+    loadFailed.value = true
+  } finally {
+    first.value = false
+    loading.value = false
+  }
+}
+
+async function repair(action) {
+  if (repairing.value || loading.value) return
+  try {
+    await ElMessageBox.confirm(repairConfirmText(action), t('warning'), {type: 'warning'})
+  } catch {
+    return
+  }
+  repairing.value = action
+  try {
+    const data = await maintenanceRepair(action)
+    health.value = data
+    loadFailed.value = false
+    ElMessage({message: actionResultText(data.lastAction) || t('repairSuccess'), type: 'success'})
+  } catch {
+    // The API interceptor displays request failures; keep the last successful report.
+  } finally {
+    repairing.value = ''
+  }
 }
 
 function repairConfirmText(action) {
@@ -220,287 +186,52 @@ refresh()
 </script>
 
 <style scoped lang="scss">
-.maintenance-loading {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.maintenance-loading { height: 100%; display: grid; place-items: center; }
+.scrollbar { height: 100%; background: var(--extra-light-fill); }
+.maintenance { max-width: 1440px; margin: 0 auto; padding: 24px; display: grid; gap: 20px; }
+.maintenance-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.maintenance-heading p, .panel-desc { color: var(--secondary-text-color); font-size: 13px; line-height: 1.65; }
+.maintenance-heading .el-button { flex-shrink: 0; }
+.panel { min-width: 0; padding: 24px; border: 1px solid var(--el-border-color-light); border-radius: var(--radius-lg); background: var(--el-bg-color); box-shadow: var(--shadow-card); }
+h2 { font-size: 15px; font-weight: 600; }
+.panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-bottom: 20px; }
+.health-summary { font-size: 12px; color: var(--regular-text-color); padding: 4px 10px; border-radius: var(--radius-sm); background: var(--extra-light-fill); font-variant-numeric: tabular-nums; }
+.health-checks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 24px; }
+.health-check { padding: 16px 0; border-top: 1px solid var(--el-border-color-lighter); }
+.health-check { min-width: 0; }
+.check-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.check-heading h3 { font-size: 13px; font-weight: 500; }
+.check-status { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; font-size: 12px; }
+.check-status > span { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; font-size: 11px; }
+.is-ok { color: var(--el-color-success-dark-2); > span { background: var(--el-color-success-light-9); } }
+.needs-attention { color: var(--el-color-danger); > span { background: var(--el-color-danger-light-9); } }
+.health-check p { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--secondary-text-color); overflow-wrap: anywhere; }
+.maintenance-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.action-panel { display: grid; gap: 12px; }
+.action-heading { display: flex; align-items: center; gap: 12px; }
+.action-mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); flex-shrink: 0; }
+.repair-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.repair-actions .el-button { height: auto; min-height: 34px; margin: 0; padding: 8px 12px; white-space: normal; text-align: left; line-height: 1.4; }
+.manual-actions { padding-top: 14px; border-top: 1px solid var(--el-border-color-light); }
+summary { cursor: pointer; color: var(--regular-text-color); font-size: 13px; padding: 8px 0; }
+summary::marker { color: var(--el-color-primary); }
+.manual-actions .panel-desc { margin: 12px 0; }
+.diagnostics summary { font-size: 14px; font-weight: 500; }
+.diagnostic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: 20px; }
+.diagnostic-grid dt { font-size: 12px; color: var(--secondary-text-color); margin-bottom: 4px; }
+.diagnostic-grid dd { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.query-plan { margin-top: 20px; padding: 14px; border-radius: var(--radius-md); background: var(--extra-light-fill); font-size: 12px; color: var(--regular-text-color); white-space: pre-wrap; overflow-wrap: anywhere; }
+.action-result { padding: 12px 16px; border: 1px solid var(--el-color-success-light-7); border-radius: var(--radius-md); background: var(--el-color-success-light-9); color: var(--el-color-success-dark-2); font-size: 13px; }
+@media (max-width: 1100px) {
+  .maintenance-actions { grid-template-columns: 1fr; }
+  .health-checks, .diagnostic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-
-.scrollbar {
-  height: 100%;
-  width: 100%;
-  max-width: 100%;
-  overflow: hidden;
-  background: var(--extra-light-fill);
-}
-
-.maintenance {
-  width: 100%;
-  max-width: 100%;
-  min-height: 100%;
-  padding: 14px 16px 22px;
-  box-sizing: border-box;
-  display: grid;
-  grid-auto-rows: min-content;
-  gap: 14px;
-  overflow-x: hidden;
-  background: var(--extra-light-fill);
-
-  @media (max-width: 1024px) {
-    padding: 12px 12px 22px;
-    gap: 12px;
-  }
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--el-text-color-secondary);
-  min-width: 0;
-
-  .icon {
-    flex-shrink: 0;
-    cursor: pointer;
-    color: var(--el-text-color-primary);
-  }
-
-  span {
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-}
-
-.number {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 14px;
-
-  @media (max-width: 1366px) {
-    gap: 12px;
-  }
-
-  @media (max-width: 767px) {
-    grid-template-columns: 1fr;
-  }
-}
-
-.number-item,
-.panel {
-  background: var(--el-bg-color);
-  border-radius: 8px;
-  border: 1px solid var(--el-border-color);
-  min-width: 0;
-  overflow: hidden;
-}
-
-.number-item {
-  padding: 15px 18px;
-
-  .top {
-    display: grid;
-    justify-content: space-between;
-    align-content: center;
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .left {
-    display: grid;
-    gap: 7px;
-    min-width: 0;
-  }
-
-  .right {
-    display: grid;
-    align-items: center;
-  }
-
-  .count-icon {
-    top: 3px;
-    position: relative;
-    display: grid;
-    align-items: center;
-    padding: 12px;
-    border-radius: 8px;
-    background: var(--el-color-primary-light-9);
-    color: var(--el-color-primary);
-  }
-
-  .desc {
-    padding-top: 10px;
-    color: var(--el-text-color-secondary);
-    font-size: 13px;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-}
-
-.panel {
-  padding: 14px 16px;
-}
-
-.action-panel {
-  display: grid;
-  gap: 12px;
-}
-
-.action-panel .panel-title {
-  padding-bottom: 0;
-}
-
-.panel-title {
-  font-size: 17px;
-  font-weight: 500;
-  padding-bottom: 12px;
-}
-
-.panel-desc {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  line-height: 1.5;
-  margin: 0;
-}
-
-.repair-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-}
-
-.repair-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 32px;
-  padding: 0 14px 0 12px;
-  border: none;
-  border-radius: 8px;
-  background: var(--el-bg-color);
-  color: var(--el-text-color-regular);
-  font-size: 13px;
-  cursor: pointer;
-  border: 1px solid var(--el-border-color);
-  transition: background-color var(--transition-fast), color var(--transition-fast);
-
-  svg {
-    flex-shrink: 0;
-    opacity: 0.75;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--el-fill-color-light);
-  }
-
-  &:active:not(:disabled) {
-    scale: 0.96;
-  }
-
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-}
-
-.is-safe {
-  color: var(--el-color-primary);
-
-  &:hover:not(:disabled) {
-    background: var(--el-color-primary-light-9);
-  }
-}
-
-.is-caution {
-  color: var(--el-color-warning-dark-2);
-
-  &:hover:not(:disabled) {
-    background: var(--el-color-warning-light-9);
-  }
-}
-
-.is-risky {
-  color: var(--el-color-error);
-
-  &:hover:not(:disabled) {
-    background: var(--el-color-error-light-9);
-  }
-}
-
-.action-result {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: var(--el-color-success-light-9);
-  color: var(--el-color-success-dark-2);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.query-plan {
-  margin-top: 12px;
-  padding: 12px;
-  border-radius: 6px;
-  background: var(--extra-light-fill);
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  word-break: break-all;
-}
-
-:deep(.el-table .cell) {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-:deep(.el-table),
-:deep(.el-table__inner-wrapper),
-:deep(.el-table__body-wrapper),
-:deep(.el-scrollbar__view) {
-  max-width: 100%;
-}
-
-:deep(.el-scrollbar__wrap) {
-  overflow-x: hidden !important;
-}
-
-:deep(.el-descriptions),
-:deep(.el-descriptions__body),
-:deep(.el-descriptions__table) {
-  width: 100%;
-  max-width: 100%;
-}
-
-:deep(.el-descriptions__content) {
-  min-width: 0;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-:deep(.el-descriptions__label) {
-  width: 145px;
-}
-
-@media (max-width: 767px) {
-  .panel {
-    padding: 14px;
-  }
-
-  .panel-title {
-    font-size: 16px;
-  }
-
-  .repair-actions {
-    gap: 8px;
-
-    .repair-btn {
-      flex: 1 1 100%;
-    }
-  }
+@media (max-width: 600px) {
+  .maintenance { padding: 16px; gap: 16px; }
+  .maintenance-heading { align-items: start; gap: 12px; }
+  .panel { padding: 16px; }
+  .health-checks { grid-template-columns: 1fr; gap: 16px; }
+  .health-check + .health-check { padding-top: 14px; border-top: 1px solid var(--el-border-color-lighter); }
+  .maintenance-actions { gap: 16px; }
 }
 </style>

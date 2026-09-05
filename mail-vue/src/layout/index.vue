@@ -3,15 +3,16 @@
     <el-aside
         id="app-navigation"
         class="aside"
+        @keydown.esc="closeNavigation"
         :inert="!uiStore.asideShow"
         :class="uiStore.asideShow ? 'aside-show' : 'el-aside-hide'">
       <Aside />
     </el-aside>
     <div
         :class="(uiStore.asideShow && isMobile)? 'overlay-show':'overlay-hide'"
-        @click="uiStore.asideShow = false"
+        @click="closeNavigation"
     ></div>
-    <el-container class="main-container">
+    <el-container class="main-container" :inert="isMobile && uiStore.asideShow">
       <el-main>
         <el-header>
             <Header />
@@ -37,6 +38,10 @@ const WriterComponent = shallowRef(null)
 const writerMounted = ref(false)
 const writerRef = ref(null)
 const isMobile = ref(window.innerWidth < 1025)
+function closeNavigation() {
+  uiStore.asideShow = false
+  nextTick(() => document.querySelector('.menu-toggle')?.focus())
+}
 const writerIntentLoader = createWriterIntentLoader({
   loadShell: () => import('@/layout/write/index.vue').then(module => {
     WriterComponent.value = module.default
@@ -100,7 +105,6 @@ onBeforeUnmount(() => {
 }
 
 .aside-show {
-  border-right: 1px solid var(--el-border-color-light);
   transform: translateX(0);
   transition: transform var(--transition-base);
   z-index: 101;
@@ -110,7 +114,7 @@ onBeforeUnmount(() => {
     left: 0;
     z-index: 101;
     height: 100%;
-    background: var(--el-bg-color);
+    background: var(--aside-background);
   }
 }
 
@@ -120,21 +124,27 @@ onBeforeUnmount(() => {
 }
 
 .layout {
+  padding: 10px 10px 10px 0;
+  background: var(--aside-background);
   height: 100%;
   position: fixed;
   width: 100%;
   top: 0;
   left: 0;
   overflow: hidden;
+  @media (max-width: 1024px) { padding: 0; }
 }
 
 .main-container {
   min-width: 0;
-  min-height: 100%;
+  height: 100%;
   background: var(--el-bg-color);
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  border-radius: 18px;
+  box-shadow: 0 8px 32px rgb(9 20 39 / 10%);
+  @media (max-width: 1024px) { border-radius: 0; box-shadow: none; }
 }
 
 .el-main {
@@ -144,6 +154,7 @@ onBeforeUnmount(() => {
 }
 
 .el-header {
+  --el-header-height: var(--header-height);
   background: var(--el-bg-color);
   border-bottom: solid 1px var(--el-border-color-light);
   padding: 0 0 0 0;
@@ -155,9 +166,9 @@ onBeforeUnmount(() => {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgb(13 25 46 / 42%);
   z-index: 99;
-  transition: all 0.3s;
+  transition: opacity var(--transition-base);
 }
 
 .overlay-hide {
