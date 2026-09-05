@@ -41,12 +41,14 @@
           <p v-else class="panel-desc">{{ $t('unauthorized') }}</p>
           <details v-if="canRepair && group.title === 'deliveryMaintenance'" class="manual-actions">
             <summary>{{ $t('manualDelivery') }}</summary>
-            <p class="panel-desc">{{ $t('manualDeliveryDesc') }}</p>
-            <div class="repair-actions">
-              <el-button v-for="[action, label] in manualActions" :key="action" type="danger" plain
-                  :loading="repairing === action" :disabled="loading || (!!repairing && repairing !== action)" @click="repair(action)">
-                {{ $t(label) }}
-              </el-button>
+            <div class="manual-popover">
+              <p class="panel-desc">{{ $t('manualDeliveryDesc') }}</p>
+              <div class="repair-actions">
+                <el-button v-for="[action, label] in manualActions" :key="action" type="danger" plain
+                    :loading="repairing === action" :disabled="loading || (!!repairing && repairing !== action)" @click="repair(action)">
+                  {{ $t(label) }}
+                </el-button>
+              </div>
             </div>
           </details>
         </section>
@@ -207,7 +209,7 @@ h2 { font-size: 15px; font-weight: 600; }
 .needs-attention { color: var(--el-color-danger); > span { background: var(--el-color-danger-light-9); } }
 .health-check p { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--secondary-text-color); overflow-wrap: anywhere; }
 .maintenance-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
-.action-panel { display: grid; gap: 12px; }
+.action-panel { position: relative; display: grid; gap: 12px; }
 .action-heading { display: flex; align-items: center; gap: 12px; }
 .action-mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); flex-shrink: 0; }
 .repair-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -215,7 +217,8 @@ h2 { font-size: 15px; font-weight: 600; }
 .manual-actions { padding-top: 14px; border-top: 1px solid var(--el-border-color-light); }
 summary { cursor: pointer; color: var(--regular-text-color); font-size: 13px; padding: 8px 0; }
 summary::marker { color: var(--el-color-primary); }
-.manual-actions .panel-desc { margin: 12px 0; }
+.manual-popover { margin-top: 12px; }
+.manual-popover .panel-desc { margin: 0 0 12px; }
 .diagnostics summary { font-size: 14px; font-weight: 500; }
 .diagnostic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: 20px; }
 .diagnostic-grid dt { font-size: 12px; color: var(--secondary-text-color); margin-bottom: 4px; }
@@ -225,6 +228,21 @@ summary::marker { color: var(--el-color-primary); }
 @media (max-width: 1100px) {
   .maintenance-actions { grid-template-columns: 1fr; }
   .health-checks, .diagnostic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1101px) {
+  .manual-actions[open] .manual-popover {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: -1px;
+    right: -1px;
+    z-index: 5;
+    margin-top: 0;
+    padding: 14px 16px 16px;
+    border: 1px solid var(--el-border-color-light);
+    border-radius: var(--radius-md);
+    background: var(--el-bg-color);
+    box-shadow: var(--shadow-card);
+  }
 }
 @media (max-width: 600px) {
   .maintenance { padding: 16px; gap: 16px; }
