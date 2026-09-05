@@ -1,7 +1,9 @@
 <template>
   <div class="main-box" :class="{'with-accounts': shouldShowAccountPanel}">
-    <div :class="shouldShowAccountPanel ? 'block-show' : 'block-hide'" @click="uiStore.accountShow = false"></div>
-    <AccountPanel v-if="accountPanelMounted && hasAccountQueryPerm" :class="shouldShowAccountPanel ? 'show' : 'hide'" :inert="!shouldShowAccountPanel" />
+    <div class="account-overlay" :class="{'is-open': shouldShowAccountPanel}" @click="uiStore.accountShow = false"></div>
+    <div class="account-panel" :class="{'is-open': shouldShowAccountPanel}" :inert="!shouldShowAccountPanel" @keydown.esc="uiStore.accountShow = false">
+      <AccountPanel v-if="accountPanelMounted && hasAccountQueryPerm" />
+    </div>
     <router-view class="main-view" v-slot="{ Component,route }">
       <keep-alive :include="['email','all-email','send','sys-setting','star','user','role','analysis','reg-key','draft']">
         <component :is="Component" :key="route.name"/>
@@ -133,51 +135,51 @@ const handleResize = () => {
 </script>
 <style lang="scss" scoped>
 
-.block-show {
-  position: fixed;
-  @media (max-width: 767px) {
-    position: absolute;
-    right: 0;
-    border: 0;
-    height: 100%;
-    width: 100%;
-    background: #000000;
-    opacity: 0.6;
-    z-index: 10;
-    transition: opacity var(--transition-base);
-  }
-}
-
-.block-hide {
-  position: fixed;
-  pointer-events: none;
-  transition: opacity var(--transition-base);
-}
-
-.show {
-  transition: transform var(--transition-base), opacity var(--transition-base);
-  @media (max-width: 767px) {
-    position: fixed;
-    z-index: 100;
-    width: 260px;
-    top: var(--header-height);
-    height: calc(100dvh - var(--header-height));
-  }
-}
-
-.hide {
-  transition: transform var(--transition-base), opacity var(--transition-base);
-  position: fixed;
-  transform: translateX(-100%);
+.account-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
   opacity: 0;
-  @media (max-width: 1024px) {
+  pointer-events: none;
+  background: rgb(15 23 42 / 48%);
+  transition: opacity var(--transition-base);
+  @media (max-width: 767px) {
+    &.is-open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+}
+
+.account-panel {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 100;
+  width: 228px;
+  min-height: 0;
+  background: var(--extra-light-fill);
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-100%);
+  transition: transform var(--transition-base), visibility var(--transition-base);
+  @media (max-width: 767px) {
     width: 260px;
-    z-index: 100;
+  }
+
+  &.is-open {
+    visibility: visible;
+    pointer-events: auto;
+    // Restore viewport positioning for the account dialogs after the slide.
+    transform: none;
+    @media (min-width: 768px) {
+      position: relative;
+    }
   }
 }
 
 
 .main-box {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   height: calc(100% - var(--header-height));

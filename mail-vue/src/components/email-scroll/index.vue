@@ -1,6 +1,6 @@
 <template>
   <div class="email-container">
-    <div class="header-actions">
+    <div class="header-actions" :class="{'has-filters': !!$slots.first}">
       <el-checkbox
           :aria-label="t('selectAll')"
           v-model="checkAll"
@@ -8,29 +8,30 @@
           :disabled="!emailList.length || loading"
       >
       </el-checkbox>
-      <div class="header-left" :style="'padding-left:' + actionLeft">
-
+      <div v-if="$slots.first" class="header-filters">
         <slot name="first"></slot>
-        <Icon class="icon reload action-icon" icon="ion:reload" width="18" height="18" role="button" tabindex="0"
-              :aria-label="t('refreshList')" @click="refresh" @keydown.enter.prevent="refresh"
-              @keydown.space.prevent="refresh"/>
-        <Icon v-perm="'email:delete'" class="icon delete action-icon" icon="uiw:delete" width="16" height="16"
-              role="button" tabindex="0" :aria-label="t('delete')"
-              v-if="selectedCount > 0"
-              @click="handleDelete" @keydown.enter.prevent="handleDelete"
-              @keydown.space.prevent="handleDelete"/>
-        <Icon v-perm="'email:delete'" class="icon delete action-icon" icon="fluent:mail-read-20-regular" width="21" height="21"
-              role="button" tabindex="0" :aria-label="t('markAsRead')"
-              v-if="selectedCount > 0 && showUnread"
-              @click="handleRead" @keydown.enter.prevent="handleRead"
-              @keydown.space.prevent="handleRead"/>
+      </div>
+      <div class="header-left" :style="'padding-left:' + actionLeft">
+        <button type="button" class="icon reload action-icon" :aria-label="t('refreshList')" :title="t('refreshList')" @click="refresh">
+          <Icon icon="ion:reload" width="18" height="18"/>
+        </button>
+        <slot name="actions"></slot>
+        <button v-perm="'email:delete'" type="button" class="icon delete action-icon"
+                :aria-label="t('delete')" :title="t('delete')" v-if="selectedCount > 0" @click="handleDelete">
+          <Icon icon="uiw:delete" width="16" height="16"/>
+        </button>
+        <button v-perm="'email:delete'" type="button" class="icon delete action-icon"
+                :aria-label="t('markAsRead')" :title="t('markAsRead')" v-if="selectedCount > 0 && showUnread" @click="handleRead">
+          <Icon icon="fluent:mail-read-20-regular" width="21" height="21"/>
+        </button>
       </div>
 
       <div class="header-right">
         <span class="email-count" v-if="total">{{ $t('emailCount', {total: total}) }}</span>
-        <Icon v-if="showAccountIcon" class="more-icon icon action-icon" width="16" height="16" icon="akar-icons:dot-grid-fill"
-              role="button" tabindex="0" :aria-label="t('settings')" @click="changeAccountShow"
-              @keydown.enter.prevent="changeAccountShow" @keydown.space.prevent="changeAccountShow"/>
+        <button v-if="showAccountIcon" type="button" class="more-icon icon action-icon"
+                :aria-label="t('emailAccount')" :title="t('emailAccount')" :aria-expanded="accountShow" @click="changeAccountShow">
+          <Icon icon="akar-icons:dot-grid-fill" width="16" height="16"/>
+        </button>
       </div>
     </div>
 
@@ -1471,24 +1472,40 @@ function loadData() {
 
 .header-actions {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'select actions meta';
   align-items: center;
   gap: 15px;
   padding: 3px 15px;
   box-shadow: var(--header-actions-border);
 
+  &.has-filters {
+    grid-template-columns: auto minmax(0, 394px) minmax(max-content, 1fr) auto;
+    grid-template-areas: 'select filters actions meta';
+  }
+
+  > .el-checkbox { grid-area: select; }
+
   .header-left {
+    grid-area: actions;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    position: relative;
-    column-gap: 0;
-    row-gap: 8px;
+    min-width: 0;
     padding-left: 2px;
     color: var(--regular-text-color);
   }
 
+  .header-filters {
+    grid-area: filters;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    min-width: 0;
+    gap: 12px;
+  }
+
   .header-right {
+    grid-area: meta;
     display: grid;
     grid-template-columns: auto auto;
     align-items: center;
@@ -1508,12 +1525,16 @@ function loadData() {
     cursor: pointer;
   }
 
-  /* 透明 padding 扩点击区至≥40px，视觉尺寸不变；键盘焦点给主色环。
-     走 :deep 是因为 #first 插槽的图标编译在各视图的作用域里，本组件的作用域选择器够不到，
-     只给自带图标加 padding 会让同一排图标一半有点击区一半没有，间距也随之错位 */
+  /* Slot buttons use the same fixed touch target as the built-in actions. */
   :deep(.action-icon) {
-    padding: 11px;
-    box-sizing: content-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    color: inherit;
     border-radius: var(--radius-sm);
     outline-offset: -2px;
     transition: background-color var(--transition-fast), color var(--transition-fast);
@@ -1524,27 +1545,20 @@ function loadData() {
     outline: 2px solid var(--el-color-primary);
   }
 
-  /* 图标之间靠各自的透明 padding 撑开就够，所以 column-gap 归零、改由输入框和下拉框
-     自带右边距。用负 margin 去抵消 column-gap 也能对齐，但换行后落在行首的那个图标
-     会被一起拽出容器左边缘 */
-  :deep(.header-left > :not(.action-icon)) {
-    margin-right: 20px;
-  }
+  @media (max-width: 767px) {
+    gap: 8px;
 
-  /* 窄屏一行要塞下下拉框加四个图标，横向收一收；纵向保持 40px 以上的可点高度。
-     只收左侧这组：右侧只有计数和一个图标，没有这个空间压力 */
-  @media (max-width: 419px) {
-    :deep(.header-left .action-icon) {
-      padding: 11px 6px;
+    &.has-filters {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-areas: 'filters filters filters' 'select actions meta';
     }
 
-    :deep(.header-left > :not(.action-icon)) {
-      margin-right: 12px;
+    .header-filters {
+      gap: 8px;
     }
   }
 
   .more-icon {
-    margin-top: 0;
     margin-left: 4px;
   }
 }

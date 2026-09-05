@@ -13,11 +13,10 @@
                actionLeft="4px"
                @jump="jumpContent"
   >
-    <template #first>
-      <Icon class="icon action-icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-down-outline"
-            v-if="params.timeSort === 0" width="28" height="28"/>
-      <Icon class="icon action-icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-up-outline" v-else
-            width="28" height="28"/>
+    <template #actions>
+      <button type="button" class="icon action-icon" :aria-label="$t('order')" :title="$t('order')" @click="changeTimeSort">
+        <Icon :icon="params.timeSort === 0 ? 'material-symbols-light:timer-arrow-down-outline' : 'material-symbols-light:timer-arrow-up-outline'" width="28" height="28"/>
+      </button>
     </template>
 
   </emailScroll>

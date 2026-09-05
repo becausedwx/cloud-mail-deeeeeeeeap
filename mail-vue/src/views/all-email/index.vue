@@ -24,6 +24,7 @@
             v-model="searchValue"
             :placeholder="$t('searchByContent')"
             class="search-input"
+            @keyup.enter="search"
         >
           <template #prefix>
             <div @click.stop="openSelect">
@@ -53,12 +54,17 @@
           <el-option key="4" :label="$t('selectDeleted')" value="delete"/>
           <el-option key="4" :label="$t('noRecipientTitle')" value="noone"/>
         </el-select>
-        <Icon class="icon action-icon" icon="iconoir:search" @click="search" width="20" height="20"/>
-        <Icon class="icon action-icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-down-outline"
-              v-if="params.timeSort === 0" width="28" height="28"/>
-        <Icon class="icon action-icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-up-outline" v-else
-              width="28" height="28"/>
-        <Icon class="icon action-icon" icon="fluent:broom-sparkle-16-regular" width="22" height="22" @click="openBathDelete"/>
+      </template>
+      <template #actions>
+        <button type="button" class="icon action-icon" :aria-label="$t('searchByContent')" :title="$t('searchByContent')" @click="search">
+          <Icon icon="iconoir:search" width="20" height="20"/>
+        </button>
+        <button type="button" class="icon action-icon" :aria-label="$t('order')" :title="$t('order')" @click="changeTimeSort">
+          <Icon :icon="params.timeSort === 0 ? 'material-symbols-light:timer-arrow-down-outline' : 'material-symbols-light:timer-arrow-up-outline'" width="28" height="28"/>
+        </button>
+        <button type="button" class="icon action-icon" :aria-label="$t('clearEmail')" :title="$t('clearEmail')" @click="openBathDelete">
+          <Icon icon="fluent:broom-sparkle-16-regular" width="22" height="22"/>
+        </button>
       </template>
     </emailScroll>
     <el-dialog v-model="showBathDelete" :title="$t('clearEmail')" width="335"
@@ -492,6 +498,13 @@ async function latest(signal) {
 :deep(.el-select__wrapper) {
   padding: 2px 10px;
   min-height: 28px;
+}
+
+@media (max-width: 767px) {
+  .search-input {
+    max-width: none;
+    min-width: 0;
+  }
 }
 
 :deep(.el-date-editor.el-input__wrapper) {
