@@ -54,10 +54,10 @@ describe('scheduled handler', () => {
 		vi.clearAllMocks();
 	});
 
-	it('recovers stale incoming mail and refreshes analysis cache on the half-hour cron', async () => {
+	it('recovers stale incoming mail without generating dashboard snapshots on the half-hour cron', async () => {
 		await worker.scheduled({ cron: '*/30 * * * *' }, {}, {});
 
-		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
+		expect(mocks.refreshEchartsCache).not.toHaveBeenCalled();
 		expect(mocks.completeReceiveAll).toHaveBeenCalledWith({ env: {} }, { limit: 2 });
 		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledWith({ env: {} }, { limit: 2 });
 		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
@@ -79,7 +79,7 @@ describe('scheduled handler', () => {
 		expect(mocks.reconcileDeliveryAttempts).toHaveBeenCalledWith({ env: {} }, { limit: 2 });
 		expect(mocks.clearNoBindOathUser).toHaveBeenCalledTimes(1);
 		expect(mocks.clearExpiredAuthFailures).toHaveBeenCalledTimes(1);
-		expect(mocks.refreshEchartsCache).toHaveBeenCalledTimes(1);
+		expect(mocks.refreshEchartsCache).not.toHaveBeenCalled();
 		expect(mocks.clearStaleCodes).not.toHaveBeenCalled();
 	});
 

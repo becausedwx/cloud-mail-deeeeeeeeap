@@ -7,14 +7,10 @@ import kvConst from '../const/kv-const';
 import dayjs from 'dayjs';
 import { toUtc } from '../utils/date-uitil';
 
-const ANALYSIS_REFRESH_CONCURRENCY = 3;
-const ANALYSIS_NUMBER_COUNT_TTL_SECONDS = 35 * 60;
-// 略长于 30 分钟的 cron 间隔，正常刷新期间不会中途过期；cron 一旦停摆，键也不会永久堆在 KV 里
+// 沿用既有快照有效期；命中不续期，过期后由下次访问重新聚合。
 const ANALYSIS_ECHARTS_TTL_SECONDS = 35 * 60;
 
-// IANA 时区匹配大小写不敏感，asia/shanghai、Asia/Shanghai、ASIA/SHANGHAI 是同一个时区，
-// 但拼进缓存键就成了三个 KV 条目，而 cron 会把每个键都拿去跑一遍完整聚合。
-// 先归一到规范名，同一时区只留一个键；无法识别的值回退 UTC，与下游 params.timeZone 的默认一致。
+// 同一时区的不同写法共用快照；无法识别的值回退 UTC。
 function normalizeTimeZone(timeZone) {
 	const candidate = typeof timeZone === 'string' ? timeZone.trim() : '';
 	if (!candidate) {
@@ -46,47 +42,12 @@ const analysisService = {
 			return cache;
 		}
 
-		return await this.refreshEchartsCacheByKey(c, cacheKey);
-	},
-
-	async refreshEchartsCacheByKey(c, cacheKey, options = {}) {
-		const params = this.echartsParamsByCacheKey(cacheKey);
-		const data = await this.queryEcharts(c, params, options);
+		const data = await this.queryEcharts(c, params);
 		await c.env.kv.put(cacheKey, JSON.stringify(data), { expirationTtl: ANALYSIS_ECHARTS_TTL_SECONDS });
 		return data;
 	},
 
-	async refreshEchartsCache(c) {
-		if (!this.analysisCacheEnabled(c)) {
-			return;
-		}
-
-		const [numberCount, nameRatio] = await Promise.all([
-			this.refreshNumberCountCache(c),
-			this.nameRatio(c)
-		]);
-		let cursor;
-
-		do {
-			const page = await c.env.kv.list({ prefix: kvConst.ANALYSIS_ECHARTS, cursor });
-			const keys = page.keys || [];
-
-			await this.mapLimit(keys, ANALYSIS_REFRESH_CONCURRENCY, async key => {
-				try {
-					await this.refreshEchartsCacheByKey(c, key.name, { numberCount, nameRatio });
-				} catch (e) {
-					console.error(`Refresh analysis cache failed for ${key.name}:`, e?.message || e);
-				}
-			});
-
-			if (page.list_complete || !page.cursor) {
-				break;
-			}
-			cursor = page.cursor;
-		} while (cursor);
-	},
-
-	async queryEcharts(c, params, options = {}) {
+	async queryEcharts(c, params) {
 
 		const { timeZone } = params;
 
@@ -110,9 +71,9 @@ const analysisService = {
 			sendDayCountRaw,
 			daySendTotalRaw
 		] = await Promise.all([
-			options.numberCount ?? this.numberCount(c),
+			analysisDao.numberCount(c),
 
-			options.nameRatio ?? this.nameRatio(c),
+			this.nameRatio(c),
 
 
 			analysisDao.userDayCount(c, diffHours),
@@ -151,31 +112,6 @@ const analysisService = {
 			.groupBy(email.name)
 			.orderBy(desc(count()))
 			.limit(6);
-	},
-
-	async numberCount(c) {
-		if (!this.analysisCacheEnabled(c)) {
-			return analysisDao.numberCount(c);
-		}
-
-		const cache = await c.env.kv.get(kvConst.ANALYSIS_NUMBER_COUNT, { type: 'json' });
-		if (cache) {
-			return cache;
-		}
-
-		const data = await analysisDao.numberCount(c);
-		await c.env.kv.put(kvConst.ANALYSIS_NUMBER_COUNT, JSON.stringify(data), { expirationTtl: ANALYSIS_NUMBER_COUNT_TTL_SECONDS });
-		return data;
-	},
-
-	async refreshNumberCountCache(c) {
-		const data = await analysisDao.numberCount(c);
-
-		if (this.analysisCacheEnabled(c)) {
-			await c.env.kv.put(kvConst.ANALYSIS_NUMBER_COUNT, JSON.stringify(data), { expirationTtl: ANALYSIS_NUMBER_COUNT_TTL_SECONDS });
-		}
-
-		return data;
 	},
 
 	async d1Health(c) {
@@ -234,27 +170,8 @@ const analysisService = {
 		return kvConst.ANALYSIS_ECHARTS + encodeURIComponent(normalizeTimeZone(params.timeZone));
 	},
 
-	echartsParamsByCacheKey(cacheKey) {
-		return {
-			timeZone: decodeURIComponent(cacheKey.replace(kvConst.ANALYSIS_ECHARTS, ''))
-		};
-	},
-
 	analysisCacheEnabled(c) {
 		return c.env.analysis_cache === true || c.env.analysis_cache === 'true';
-	},
-
-	async mapLimit(items, limit, mapper) {
-		let index = 0;
-		const workerCount = Math.min(limit, items.length);
-		const workers = Array.from({ length: workerCount }, async () => {
-			while (index < items.length) {
-				const item = items[index++];
-				await mapper(item);
-			}
-		});
-
-		await Promise.all(workers);
 	}
 }
 

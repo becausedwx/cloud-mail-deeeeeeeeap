@@ -1,129 +1,95 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import analysisService from '../src/service/analysis-service';
 import analysisDao from '../src/dao/analysis-dao';
+import kvConst from '../src/const/kv-const';
 
-describe('analysis service cache refresh', () => {
-	afterEach(() => {
-		vi.restoreAllMocks();
+function createCacheContext(enabled = true) {
+	let now = 0;
+	const entries = new Map();
+	const kv = {
+		get: vi.fn(async (key, options) => {
+			const entry = entries.get(key);
+			if (!entry || entry.expires <= now) return null;
+			return options?.type === 'json' ? JSON.parse(entry.value) : entry.value;
+		}),
+		put: vi.fn(async (key, value, { expirationTtl }) => {
+			entries.set(key, { value, expires: now + expirationTtl * 1000 });
+		})
+	};
+	return {
+		c: { env: { analysis_cache: enabled, kv } },
+		entries,
+		advanceTo: value => { now = value; }
+	};
+}
+
+function stubAggregates() {
+	const numberCount = vi.spyOn(analysisDao, 'numberCount').mockResolvedValue({ users: 1 });
+	const nameRatio = vi.spyOn(analysisService, 'nameRatio').mockResolvedValue([{ name: 'sender', total: 2 }]);
+	vi.spyOn(analysisDao, 'userDayCount').mockResolvedValue([]);
+	vi.spyOn(analysisDao, 'receiveDayCount').mockResolvedValue([]);
+	vi.spyOn(analysisDao, 'sendDayCount').mockResolvedValue([]);
+	return { numberCount, nameRatio };
+}
+
+describe('on-demand analysis snapshots', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('reuses a timezone snapshot without querying or extending its expiry, then refreshes on demand', async () => {
+		const { c, entries, advanceTo } = createCacheContext();
+		const { numberCount, nameRatio } = stubAggregates();
+		const first = await analysisService.echarts(c, { timeZone: 'Asia/Shanghai' });
+		const cacheKey = analysisService.echartsCacheKey({ timeZone: 'Asia/Shanghai' });
+		const expiry = entries.get(cacheKey).expires;
+		expect(expiry).toBe(35 * 60 * 1000);
+
+		advanceTo(expiry - 1);
+		expect(await analysisService.echarts(c, { timeZone: ' asia/shanghai ' })).toEqual(first);
+		expect(numberCount).toHaveBeenCalledTimes(1);
+		expect(nameRatio).toHaveBeenCalledTimes(1);
+		expect(entries.get(cacheKey).expires).toBe(expiry);
+
+		advanceTo(expiry);
+		numberCount.mockResolvedValue({ users: 2 });
+		const refreshed = await analysisService.echarts(c, { timeZone: 'Asia/Shanghai' });
+		expect(refreshed.numberCount).toEqual({ users: 2 });
+		expect(numberCount).toHaveBeenCalledTimes(2);
+		expect(nameRatio).toHaveBeenCalledTimes(2);
+		expect(entries.size).toBe(1);
 	});
 
-	it('paginates KV keys, reuses one global snapshot set, and isolates key refresh failures', async () => {
-		const numberCount = { users: 1, receive: 2, send: 3 };
-		const nameRatio = [{ name: 'sender', total: 4 }];
-		const list = vi.fn()
-			.mockResolvedValueOnce({
-				keys: [{ name: 'analysis_echarts:UTC' }, { name: 'analysis_echarts:Asia%2FShanghai' }],
-				list_complete: false,
-				cursor: 'next-page'
-			})
-			.mockResolvedValueOnce({
-				keys: [{ name: 'analysis_echarts:Europe%2FLondon' }],
-				list_complete: true
-			});
-		const c = {
-			env: {
-				analysis_cache: 'true',
-				kv: { list }
-			}
-		};
-		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-		const refreshNumberCountCache = vi.spyOn(analysisService, 'refreshNumberCountCache')
-			.mockResolvedValue(numberCount);
-		const queryNameRatio = vi.spyOn(analysisService, 'nameRatio')
-			.mockResolvedValue(nameRatio);
-		const refreshEchartsCacheByKey = vi.spyOn(analysisService, 'refreshEchartsCacheByKey')
-			.mockImplementation(async (_c, key) => {
-				if (key === 'analysis_echarts:Asia%2FShanghai') {
-					throw new Error('refresh failed');
-				}
-			});
-
-		await analysisService.refreshEchartsCache(c);
-
-		expect(refreshNumberCountCache).toHaveBeenCalledTimes(1);
-		expect(queryNameRatio).toHaveBeenCalledTimes(1);
-		expect(list).toHaveBeenNthCalledWith(1, { prefix: 'analysis_echarts:', cursor: undefined });
-		expect(list).toHaveBeenNthCalledWith(2, { prefix: 'analysis_echarts:', cursor: 'next-page' });
-		expect(refreshEchartsCacheByKey).toHaveBeenCalledTimes(3);
-		expect(refreshEchartsCacheByKey.mock.calls.every(call => call[2].numberCount === numberCount)).toBe(true);
-		expect(refreshEchartsCacheByKey.mock.calls.every(call => call[2].nameRatio === nameRatio)).toBe(true);
-		expect(errorSpy).toHaveBeenCalledTimes(1);
-	});
-
-	it('uses a 35 minute TTL for on-demand and scheduled number count snapshots', async () => {
-		const numberCount = { users: 1 };
-		const get = vi.fn().mockResolvedValue(null);
-		const put = vi.fn().mockResolvedValue(undefined);
-		const c = {
-			env: {
-				analysis_cache: true,
-				kv: { get, put }
-			}
-		};
-		vi.spyOn(analysisDao, 'numberCount').mockResolvedValue(numberCount);
-
-		expect(await analysisService.numberCount(c)).toBe(numberCount);
-		expect(await analysisService.refreshNumberCountCache(c)).toBe(numberCount);
-
-		expect(put).toHaveBeenCalledTimes(2);
-		expect(put.mock.calls.every(call => (
-			call[0] === 'analysis_number_count:'
-			&& call[2]?.expirationTtl === 35 * 60
-		))).toBe(true);
-	});
-
-	it('does not query or write scheduled analysis caches when caching is disabled', async () => {
-		const list = vi.fn();
-		const put = vi.fn();
-		const c = {
-			env: {
-				analysis_cache: false,
-				kv: { list, put }
-			}
-		};
-		const numberCountQuery = vi.spyOn(analysisDao, 'numberCount')
-			.mockResolvedValue({ users: 1 });
-		const nameRatioQuery = vi.spyOn(analysisService, 'nameRatio')
-			.mockResolvedValue([]);
-
-		await analysisService.refreshEchartsCache(c);
-
-		expect(numberCountQuery).not.toHaveBeenCalled();
-		expect(nameRatioQuery).not.toHaveBeenCalled();
-		expect(list).not.toHaveBeenCalled();
-		expect(put).not.toHaveBeenCalled();
-
-		await analysisService.refreshNumberCountCache(c);
-		expect(numberCountQuery).toHaveBeenCalledTimes(1);
-		expect(put).not.toHaveBeenCalled();
-	});
-
-	it('queries nameRatio on demand and uses a supplied refresh snapshot', async () => {
-		const numberCount = { users: 1 };
-		const onDemandRatio = [{ name: 'on-demand', total: 2 }];
-		const suppliedRatio = [{ name: 'scheduled', total: 3 }];
-		const c = {
-			env: {
-				kv: { get: vi.fn().mockResolvedValue(0) }
-			}
-		};
-		vi.spyOn(analysisService, 'numberCount').mockResolvedValue(numberCount);
-		const nameRatioQuery = vi.spyOn(analysisService, 'nameRatio')
-			.mockResolvedValue(onDemandRatio);
-		vi.spyOn(analysisDao, 'userDayCount').mockResolvedValue([]);
-		vi.spyOn(analysisDao, 'receiveDayCount').mockResolvedValue([]);
-		vi.spyOn(analysisDao, 'sendDayCount').mockResolvedValue([]);
-
-		const onDemand = await analysisService.queryEcharts(c, { timeZone: 'UTC' });
-		expect(nameRatioQuery).toHaveBeenCalledTimes(1);
-		expect(onDemand.receiveRatio.nameRatio).toBe(onDemandRatio);
-
-		nameRatioQuery.mockClear();
-		const scheduled = await analysisService.queryEcharts(c, { timeZone: 'UTC' }, {
-			numberCount,
-			nameRatio: suppliedRatio
+	it('creates a fresh chart snapshot without inheriting an older nested count cache', async () => {
+		const { c, entries } = createCacheContext();
+		entries.set('analysis_number_count:', {
+			value: JSON.stringify({ users: 0 }),
+			expires: 35 * 60 * 1000
 		});
-		expect(nameRatioQuery).not.toHaveBeenCalled();
-		expect(scheduled.receiveRatio.nameRatio).toBe(suppliedRatio);
+		const { numberCount } = stubAggregates();
+
+		const result = await analysisService.echarts(c, { timeZone: 'UTC' });
+
+		expect(result.numberCount).toEqual({ users: 1 });
+		expect(numberCount).toHaveBeenCalledTimes(1);
+		expect(c.env.kv.put).toHaveBeenCalledTimes(1);
+	});
+
+	it('returns live aggregates when caching is disabled', async () => {
+		const { c } = createCacheContext(false);
+		const { numberCount } = stubAggregates();
+		await analysisService.echarts(c, { timeZone: 'UTC' });
+		numberCount.mockResolvedValue({ users: 2 });
+
+		expect((await analysisService.echarts(c, { timeZone: 'UTC' })).numberCount).toEqual({ users: 2 });
+		expect(numberCount).toHaveBeenCalledTimes(2);
+		expect(c.env.kv.put).not.toHaveBeenCalled();
+		expect(c.env.kv.get.mock.calls.every(([key]) => key.startsWith(kvConst.SEND_DAY_COUNT))).toBe(true);
+	});
+
+	it.each([true, false])('falls back to UTC for invalid timezones with caching=%s', async enabled => {
+		const { c } = createCacheContext(enabled);
+		stubAggregates();
+		const invalid = await analysisService.echarts(c, { timeZone: 'not-a-timezone' });
+		const utc = await analysisService.echarts(c, { timeZone: 'UTC' });
+		expect(invalid).toEqual(utc);
 	});
 });

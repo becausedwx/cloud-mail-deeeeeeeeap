@@ -1,28 +1,25 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 
-const state = vi.hoisted(() => ({selectCalls: 0, batchCalls: 0, batchResults: []}));
+const state = {batchCalls: 0, statements: [], batchResults: []};
 
-vi.mock('../src/entity/orm', () => ({
-	default: vi.fn(() => ({
-		select() {
-			state.selectCalls++;
-			const builder = {
-				from() { return builder; },
-				leftJoin() { return builder; },
-				where() { return builder; },
-				orderBy() { return builder; },
-				limit() { return builder; },
-				async all() { return []; },
-				async get() { return null; }
+function context() {
+	return {env: {db: {
+		prepare(sql) {
+			return {
+				sql,
+				bind(...bindings) {
+					this.bindings = bindings;
+					return this;
+				}
 			};
-			return builder;
 		},
-		async batch(stmts) {
+		async batch(statements) {
 			state.batchCalls++;
-			return stmts.map(() => state.batchResults.length ? state.batchResults.shift() : []);
+			state.statements = statements;
+			return statements.map(() => ({results: state.batchResults.shift() ?? []}));
 		}
-	}))
-}));
+	}}};
+}
 
 vi.mock('../src/service/att-service', () => ({
 	default: {
@@ -42,60 +39,79 @@ vi.mock('../src/service/email-search-service', () => ({
 
 const {default: emailService} = await import('../src/service/email-service');
 
-describe('continuation list query budget', () => {
+describe.each([
+	{
+		name: 'normal mailbox',
+		method: 'list',
+		params: {type: 0, accountId: 1, allReceive: 1},
+		emptyLatest: {emailId: 0, accountId: 1, userId: 7}
+	},
+	{
+		name: 'administrator mailbox',
+		method: 'allList',
+		params: {},
+		emptyLatest: {emailId: 0, accountId: 0, userId: 0}
+	}
+])('$name batch list contract', ({method, params, emptyLatest}) => {
+	function list(options = {}) {
+		return emailService[method](context(), {
+			emailId: 0,
+			size: 50,
+			timeSort: 0,
+			lite: 1,
+			...params,
+			...options
+		}, 7);
+	}
+
 	beforeEach(() => {
-		state.selectCalls = 0;
 		state.batchCalls = 0;
+		state.statements = [];
 		state.batchResults = [];
 	});
 
-	it('skips total and latest queries for a normal continuation page', async () => {
-		const result = await emailService.list({env: {}}, {
-			emailId: 100,
-			type: 0,
-			accountId: 1,
-			size: 50,
-			timeSort: 0,
-			allReceive: 1,
-			lite: 1,
-			withTotal: 0,
-			withLatest: 0
-		}, 7);
+	it('returns the total and latest cursor as single values from one D1 batch', async () => {
+		state.batchResults = [[], [{total: 7}], [{email_id: 42, account_id: 1, user_id: 7}]];
 
-		expect(state.selectCalls).toBe(1);
-		expect(result).toEqual({list: [], total: 0, hasMore: false});
+		const result = await list();
+
+		expect(state.batchCalls).toBe(1);
+		expect(state.statements).toHaveLength(3);
+		expect(result).toEqual({
+			list: [],
+			total: 7,
+			hasMore: false,
+			latestEmail: {emailId: 42, accountId: 1, userId: 7}
+		});
 	});
 
-	it('skips total and latest queries for an administrator continuation page', async () => {
-		const result = await emailService.allList({env: {}}, {
+	it('skips total and latest queries for a continuation page', async () => {
+		const result = await list({
 			emailId: 100,
-			size: 50,
-			timeSort: 0,
-			lite: 1,
 			withTotal: 0,
 			withLatest: 0
 		});
 
 		expect(state.batchCalls).toBe(1);
-		expect(state.selectCalls).toBe(1);
+		expect(state.statements).toHaveLength(1);
 		expect(result).toEqual({list: [], total: 0, hasMore: false});
 	});
 
 	it('keeps the existing latestEmail contract when withLatest is omitted', async () => {
-		state.batchResults = [[], null];
-		const result = await emailService.list({env: {}}, {
-			emailId: 100,
-			type: 0,
-			accountId: 1,
-			size: 50,
-			timeSort: 0,
-			allReceive: 1,
-			lite: 1,
-			withTotal: 0
-		}, 7);
+		state.batchResults = [[], []];
+		const result = await list({withTotal: 0});
 
-		// 首屏语义：list+latest 合并进同一次 batch，仍是 1 次往返
 		expect(state.batchCalls).toBe(1);
-		expect(result.latestEmail).toEqual({emailId: 0, accountId: 1, userId: 7});
+		expect(state.statements).toHaveLength(2);
+		expect(result).toEqual({list: [], total: 0, hasMore: false, latestEmail: emptyLatest});
+	});
+
+	it('can include the total while omitting the latest query', async () => {
+		state.batchResults = [[], [{total: 7}]];
+		const result = await list({withLatest: 0});
+
+		expect(state.batchCalls).toBe(1);
+		expect(state.statements).toHaveLength(2);
+		expect(result).toEqual({list: [], total: 7, hasMore: false});
 	});
 });

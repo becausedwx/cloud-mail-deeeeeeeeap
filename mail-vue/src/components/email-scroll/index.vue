@@ -353,6 +353,7 @@ const latestEmail = ref(null)
 const scrollbarRef = ref(null)
 const requestCoordinator = createRequestCoordinator(getSessionGeneration)
 const pagePrefetch = createPagePrefetchController()
+let refreshPending = false
 let isMobile = ref(innerWidth < 1367)
 let skeletonRows = 0
 const timePaddingRight = ref('');
@@ -425,7 +426,10 @@ const activeRuntime = createActiveRuntime({
     { target: window, type: 'resize', listener: handleResize },
     { target: window, type: 'wheel', listener: handleWheel }
   ],
-  onActivate: () => pagePrefetch.activate(),
+  onActivate: () => {
+    pagePrefetch.activate()
+    if (refreshPending) getEmailList(true)
+  },
   onDeactivate: () => {
     pagePrefetch.deactivate()
     clearTimeout(preloadTimer)
@@ -898,8 +902,14 @@ function jumpDetails(email) {
 
 
 function getEmailList(refresh = false) {
+  // KeepAlive 隐藏页仍收到账号变更；失效立即执行，请求等重新进入后合并补发。
+  if (refresh && !activeRuntime.isActive()) {
+    refreshPending = true
+    return
+  }
   const request = requestCoordinator.begin();
   if (!request) return;
+  if (refresh) refreshPending = false
 
   let emailId = emailList.length > 0 ? emailList.at(-1).emailId : 0;
   const pageKey = getPageKey(emailId);
@@ -1056,6 +1066,7 @@ function refreshList() {
 function resetEmailSessionState() {
   requestCoordinator.invalidate()
   pagePrefetch.invalidate()
+  refreshPending = false
   clearTimeout(preloadTimer)
   emailList.length = 0
   expandList.length = 0

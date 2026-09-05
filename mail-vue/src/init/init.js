@@ -23,16 +23,6 @@ import {
 } from "@/init/auth-bootstrap.js";
 import {prefetchLoginBackground} from "@/views/login/login-background-prefetch.js";
 
-// 背景图 URL 解析后立即并行预取；登录组件挂载时复用同一 Image，
-// 不再等「API 返回 → 组件挂载」串行完成后才开始下载。
-function prefetchBackgroundEarly(settingStore) {
-    const src = settingStore.lastBackgroundUrl;
-    if (src) {
-        prefetchLoginBackground(src);
-    }
-    return src;
-}
-
 export async function init() {
     document.title = '\u200B'
 
@@ -49,8 +39,9 @@ export async function init() {
 
     i18n.global.locale.value = settingStore.lang
 
-    // 回访用户：用上次缓存的背景 URL 立即开始加载（与 API 请求并行）
-    prefetchBackgroundEarly(settingStore);
+    // 匿名回访与 API 并行加载登录背景；已登录用户不需要下载登录页图片。
+    const prefetchedBackground = !token ? settingStore.lastBackgroundUrl : '';
+    if (prefetchedBackground) prefetchLoginBackground(prefetchedBackground);
 
     let setting = null;
 
@@ -101,14 +92,13 @@ export async function init() {
         document.title = setting.title;
     }
 
-    // API 返回后：若配置的背景与缓存 URL 不同（管理员换图），补一次预取；
-    // 相同则前面已发起，无需重复。同时记录最新 URL 供下次回访使用。
+    // 401 可能已清除 token：按本次实际预取去重，确保登录回退仍能加载缓存 URL。
     if (setting.background) {
         const src = cvtR2Url(setting.background);
-        if (src !== settingStore.lastBackgroundUrl) {
+        if (!localStorage.getItem('token') && src !== prefetchedBackground) {
             prefetchLoginBackground(src);
-            settingStore.lastBackgroundUrl = src;
         }
+        settingStore.lastBackgroundUrl = src;
     } else {
         settingStore.lastBackgroundUrl = '';
     }

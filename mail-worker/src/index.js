@@ -4,7 +4,6 @@ import userService from './service/user-service';
 import verifyRecordService from './service/verify-record-service';
 import emailService from './service/email-service';
 import oauthService from "./service/oauth-service";
-import analysisService from './service/analysis-service';
 import attService from './service/att-service';
 import r2Service from './service/r2-service';
 import maintenanceService from './service/maintenance-service';
@@ -66,7 +65,6 @@ export default {
 			await runScheduledTask('delivery-attempt-reconcile', () => deliveryAttemptService.reconcile({ env }, { limit: 2 }))
 			await runScheduledTask('clear-expired-auth-failures', () => authRateLimitService.clearExpired({ env }))
 			await runScheduledTask('clear-expired-oauth-security', () => oauthService.clearExpiredOAuthSecurity({ env }))
-			await runScheduledTask('analysis-cache', () => analysisService.refreshEchartsCache({ env }))
 			return;
 		}
 
@@ -81,6 +79,5 @@ export default {
 				staleMinutes: env.code_stale_minutes
 			}))
 		}
-		await runScheduledTask('analysis-cache', () => analysisService.refreshEchartsCache({ env }))
 	},
 };

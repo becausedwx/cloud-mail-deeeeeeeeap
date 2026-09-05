@@ -322,10 +322,10 @@ const emailService = {
 		if (totalQuery) batchStmts.push(totalQuery);
 		if (latestEmailQuery) batchStmts.push(latestEmailQuery);
 		const batchResults = await db.batch(batchStmts);
-		let list = batchResults[0].rows ?? batchResults[0];
+		let list = batchResults[0];
 		let resultIdx = 1;
-		let totalRow = withTotal ? batchResults[resultIdx++] : { total: 0 };
-		let latestEmail = withLatest ? batchResults[resultIdx] : null;
+		const totalRow = withTotal ? batchResults[resultIdx++][0] : { total: 0 };
+		let latestEmail = withLatest ? batchResults[resultIdx][0] : null;
 
 		const hasMore = list.length > size;
 		list = hasMore ? list.slice(0, size) : list;
@@ -1492,11 +1492,6 @@ const emailService = {
 			.leftJoin(user, eq(email.userId, user.userId))
 			.where(and(...conditions));
 
-		const queryCount = withTotal ? orm(c).select({ total: count() })
-			.from(email)
-			.leftJoin(user, eq(email.userId, user.userId))
-			.where(and(...countConditions)) : Promise.resolve({ total: 0 });
-
 		if (timeSort) {
 			query.orderBy(asc(email.emailId));
 		} else {
@@ -1525,10 +1520,10 @@ const emailService = {
 		if (queryCountStmt) batchStmts.push(queryCountStmt);
 		if (latestEmailQuery) batchStmts.push(latestEmailQuery);
 		const batchResults = await db.batch(batchStmts);
-		let list = batchResults[0].rows ?? batchResults[0];
+		let list = batchResults[0];
 		let resultIdx = 1;
-		let totalRow = withTotal ? (batchResults[resultIdx++] ?? { total: 0 }) : { total: 0 };
-		let latestEmail = withLatest ? batchResults[resultIdx] : null;
+		const totalRow = withTotal ? batchResults[resultIdx++][0] : { total: 0 };
+		let latestEmail = withLatest ? batchResults[resultIdx][0] : null;
 
 		const hasMore = list.length > size;
 		list = hasMore ? list.slice(0, size) : list;
